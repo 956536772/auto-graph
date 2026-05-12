@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import JXG from 'jsxgraph';
 import { ShapeRegistry } from './lib/ShapeRegistry';
 import { DrawingEngine } from './lib/DrawingEngine';
@@ -17,13 +17,14 @@ export default function App() {
   const engineRef = useRef(null);
   const [activeTool, setActiveTool] = useState('选择');
   const [status, setStatus] = useState('就绪 - 请在右侧输入绘图需求（右键平移，左键选择）');
-  const [messages, setMessages] = useState([{ role: 'ai', text: '你好！我是你的几何助手。你可以告诉我你想画什么，比如：“画一个正方形 ABCD”。' }]);
+  const [messages, setMessages] = useState([{ role: 'ai', text: '你好！我是你的几何助手。你可以让我画三角形、作外接圆/内切圆、过圆上一点作切线，或求两圆交点。' }]);
   const [inputText, setInputText] = useState('');
   const chatMessagesRef = useRef(null);
 
   // 绘图状态机 Ref
   const drawState = useRef({
     point1Id: null,
+    dragStart: null,
     ghostPoint: null,
     ghostShape: null,
     tempPoints: []
@@ -41,8 +42,11 @@ export default function App() {
 
   const resetDrawState = (board) => {
     drawState.current.point1Id = null;
+    drawState.current.dragStart = null;
     if (drawState.current.ghostShape) { board.removeObject(drawState.current.ghostShape); drawState.current.ghostShape = null; }
     if (drawState.current.ghostPoint) { board.removeObject(drawState.current.ghostPoint); drawState.current.ghostPoint = null; }
+    if (drawState.current.f1) { board.removeObject(drawState.current.f1); drawState.current.f1 = null; }
+    if (drawState.current.f2) { board.removeObject(drawState.current.f2); drawState.current.f2 = null; }
   };
 
   useEffect(() => {
@@ -71,7 +75,11 @@ export default function App() {
     activeToolRef.current = activeTool;
     if (engineRef.current) {
         const board = engineRef.current.board;
-        board.setAttribute({ browsing: { enabled: (activeTool === '选择') } });
+        const isSelect = (activeTool === '选择');
+        board.setAttribute({ 
+            browsing: { enabled: isSelect },
+            pan: { enabled: isSelect }
+        });
         resetDrawState(board);
     }
   }, [activeTool]);
@@ -93,9 +101,16 @@ export default function App() {
       const target = getTargetUnderMouse(board, e);
       const coords = board.getUsrCoordsOfMouse(e);
       let x = coords[0], y = coords[1];
-      let currentPointId = null;
+      let currentPointId;
       const engine = engineRef.current;
       const registry = registryRef.current;
+
+      // 圆工具：记录拖拽起点
+      if (tool === '圆') {
+          drawState.current.dragStart = { x, y };
+          setStatus('拖动鼠标绘制圆/椭圆 (按住 Shift 画正圆)');
+          return;
+      }
 
       if (target && target.type === 'point' && target.obj.registryId) {
           currentPointId = target.obj.registryId;
@@ -111,29 +126,20 @@ export default function App() {
 
       if (tool === '点') {
           setStatus('点创建完成');
-      } else if (tool === '线段' || tool === '圆') {
+      } else if (tool === '线段') {
           if (!drawState.current.point1Id) {
               drawState.current.point1Id = currentPointId;
               setStatus(`已确定起点，请点击第二个点`);
               const p1Obj = registry.get(drawState.current.point1Id);
               drawState.current.ghostPoint = board.create('point', [x, y], { visible: false, name: '' });
-              
-              if (tool === '线段') {
-                  drawState.current.ghostShape = board.create('segment', [p1Obj, drawState.current.ghostPoint], { 
-                      dash: 2, strokeColor: '#999', strokeWidth: 1, highlight: false 
-                  });
-              } else if (tool === '圆') {
-                  drawState.current.ghostShape = board.create('circle', [p1Obj, drawState.current.ghostPoint], { 
-                      dash: 2, strokeColor: '#999', strokeWidth: 1, fillColor: 'none', highlight: false 
-                  });
-              }
+              drawState.current.ghostShape = board.create('segment', [p1Obj, drawState.current.ghostPoint], { 
+                  dash: 2, strokeColor: '#999', strokeWidth: 1, highlight: false 
+              });
           } else {
               if (drawState.current.point1Id !== currentPointId) {
-                  const action = tool === '线段' ? 'segment' : 'circle';
-                  const params = tool === '线段' ? { p1: drawState.current.point1Id, p2: currentPointId } : { center: drawState.current.point1Id, through: currentPointId };
+                  engine.execute([{ action: 'segment', params: { p1: drawState.current.point1Id, p2: currentPointId }, result_id: `shape_${Date.now()}` }]);
                   resetDrawState(board);
-                  engine.execute([{ action: action, params: params, result_id: `shape_${Date.now()}` }]);
-                  setStatus(`${tool}绘制完成`);
+                  setStatus(`线段绘制完成`);
               } else {
                   setStatus('起点和终点不能相同，请重新选择');
               }
@@ -143,19 +149,80 @@ export default function App() {
 
     const onMove = (e) => {
         const tool = activeToolRef.current;
+        const coords = board.getUsrCoordsOfMouse(e);
+        
+        // 处理圆/椭圆的拖拽预览
+        if (tool === '圆' && drawState.current.dragStart) {
+            const start = drawState.current.dragStart;
+            let rx = Math.abs(coords[0] - start.x) / 2;
+            let ry = Math.abs(coords[1] - start.y) / 2;
+            if (e.shiftKey) rx = ry = Math.max(rx, ry);
+            const cx = (start.x + coords[0]) / 2;
+            const cy = (start.y + coords[1]) / 2;
+
+            if (!drawState.current.ghostShape) {
+                drawState.current.f1 = board.create('point', [cx, cy], { visible: false });
+                drawState.current.f2 = board.create('point', [cx, cy], { visible: false });
+                drawState.current.ghostShape = board.create('ellipse', [
+                    drawState.current.f1,
+                    drawState.current.f2,
+                    () => drawState.current.major || 0
+                ], { dash: 2, strokeColor: '#999', strokeWidth: 1, fillColor: 'none', highlight: false });
+            }
+            
+            if (rx >= ry) {
+                const c = Math.sqrt(rx * rx - ry * ry);
+                drawState.current.f1.setPosition(JXG.COORDS_BY_USER, [cx - c, cy]);
+                drawState.current.f2.setPosition(JXG.COORDS_BY_USER, [cx + c, cy]);
+                drawState.current.major = 2 * rx;
+            } else {
+                const c = Math.sqrt(ry * ry - rx * rx);
+                drawState.current.f1.setPosition(JXG.COORDS_BY_USER, [cx, cy - c]);
+                drawState.current.f2.setPosition(JXG.COORDS_BY_USER, [cx, cy + c]);
+                drawState.current.major = 2 * ry;
+            }
+            board.update();
+            return;
+        }
+
         if (drawState.current.point1Id && drawState.current.ghostPoint) {
-            const coords = board.getUsrCoordsOfMouse(e);
             drawState.current.ghostPoint.setPosition(JXG.COORDS_BY_USER, coords);
             board.update();
         }
     };
 
+    const onUp = (e) => {
+        const tool = activeToolRef.current;
+        if (tool === '圆' && drawState.current.dragStart) {
+            const start = drawState.current.dragStart;
+            const coords = board.getUsrCoordsOfMouse(e);
+            let rx = Math.abs(coords[0] - start.x) / 2;
+            let ry = Math.abs(coords[1] - start.y) / 2;
+            
+            if (e.shiftKey) rx = ry = Math.max(rx, ry);
+            
+            if (rx > 0.05 && ry > 0.05) {
+                const cx = (start.x + coords[0]) / 2;
+                const cy = (start.y + coords[1]) / 2;
+                engineRef.current.execute([{
+                    action: 'ellipse',
+                    params: { cx, cy, rx, ry },
+                    result_id: `ellipse_${Date.now()}`
+                }]);
+                setStatus('绘制完成');
+            }
+            resetDrawState(board);
+        }
+    };
+
     board.on('down', onDown);
     board.on('move', onMove);
+    board.on('up', onUp);
 
     return () => {
         board.off('down', onDown);
         board.off('move', onMove);
+        board.off('up', onUp);
     };
   }, []);
 
@@ -182,12 +249,13 @@ export default function App() {
     setStatus('AI 正在分析题意并绘图...');
 
     try {
+        const context = registryRef.current.serialize();
         const response = await fetch('http://localhost:8080/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 text: text,
-                context: JSON.stringify(registryRef.current.serialize())
+                context
             })
         });
         const data = await response.json();
@@ -195,8 +263,14 @@ export default function App() {
         if (data.instructions && data.instructions.length > 0) {
             engineRef.current.execute(data.instructions);
         }
-        setMessages(prev => [...prev, { role: 'ai', text: data.responseText }]);
-        setStatus('就绪');
+        setMessages(prev => [...prev, { role: 'ai', text: data.responseText || '已处理。' }]);
+        if (data.status === 'clarification') {
+            setStatus('需要澄清 - 请补充说明后再发送');
+        } else if (data.status === 'error') {
+            setStatus('未执行 - 请调整描述');
+        } else {
+            setStatus('就绪');
+        }
     } catch (e) {
         console.error(e);
         setMessages(prev => [...prev, { role: 'ai', text: "抱歉，无法连接到后端服务。" }]);
