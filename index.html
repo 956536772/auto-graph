@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>autoGraph - 自然语言几何绘图</title>
+    <!-- JSXGraph CSS -->
+    <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/jsxgraph/distrib/jsxgraph.css" />
+    <!-- JSXGraph JavaScript -->
+    <script type="text/javascript" charset="UTF-8" src="https://cdn.jsdelivr.net/npm/jsxgraph/distrib/jsxgraphcore.js"></script>
+    <style>
+        :root {
+            --panel-bg: rgba(255, 255, 255, 0.85);
+            --panel-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            --primary-color: #1890ff;
+            --border-radius: 12px;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background-color: #fff;
+        }
+
+        #jxgbox {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* 浮动面板通用样式 */
+        .floating-panel {
+            position: absolute;
+            background: var(--panel-bg);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-radius: var(--border-radius);
+            box-shadow: var(--panel-shadow);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            z-index: 1000;
+        }
+
+        /* 左侧工具栏 */
+        #toolbar {
+            left: 20px;
+            top: 50%;
+            transform: translateY(-50%);
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .tool-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            color: #444;
+        }
+
+        .tool-btn:hover {
+            background: rgba(24, 144, 255, 0.1);
+            color: var(--primary-color);
+        }
+
+        .tool-btn.active {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        /* 右侧聊天框 */
+        #chat-container {
+            right: 20px;
+            top: 20px;
+            bottom: 20px;
+            width: 320px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #chat-header {
+            padding: 15px;
+            border-bottom: 1px solid rgba(0,0,0,0.05);
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        #chat-messages {
+            flex: 1;
+            padding: 15px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .message {
+            max-width: 85%;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .message.ai {
+            align-self: flex-start;
+            background: white;
+            border: 1px solid rgba(0,0,0,0.05);
+        }
+
+        .message.user {
+            align-self: flex-end;
+            background: var(--primary-color);
+            color: white;
+        }
+
+        #chat-input-area {
+            padding: 15px;
+            border-top: 1px solid rgba(0,0,0,0.05);
+            display: flex;
+            gap: 8px;
+        }
+
+        #chat-input {
+            flex: 1;
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid rgba(0,0,0,0.1);
+            outline: none;
+            font-family: inherit;
+        }
+
+        #send-btn {
+            padding: 8px 16px;
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        /* 顶部状态栏 */
+        #status-bar {
+            top: 20px;
+            left: 20px;
+            padding: 8px 15px;
+            font-size: 13px;
+            color: #666;
+        }
+
+        /* 响应式微调 */
+        @media (max-width: 768px) {
+            #chat-container {
+                width: calc(100% - 40px);
+                height: 40%;
+                top: auto;
+                bottom: 20px;
+            }
+            #toolbar {
+                top: 20px;
+                left: 50%;
+                transform: translateX(-50%);
+                flex-direction: row;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="jxgbox" class="jxgbox"></div>
+
+    <!-- 悬浮工具栏 -->
+    <div id="toolbar" class="floating-panel">
+        <button class="tool-btn active" title="选择"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"></path><path d="M13 13l6 6"></path></svg></button>
+        <button class="tool-btn" title="点"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle></svg></button>
+        <button class="tool-btn" title="线段"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><circle cx="5" cy="12" r="1"></circle><circle cx="19" cy="12" r="1"></circle></svg></button>
+        <button class="tool-btn" title="圆"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle></svg></button>
+        <div style="height: 1px; background: rgba(0,0,0,0.1); margin: 5px 0;"></div>
+        <button class="tool-btn" id="clear-btn" title="清空"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg></button>
+        <button class="tool-btn" id="undo-btn" title="撤销"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13"></path></svg></button>
+    </div>
+
+    <!-- 状态栏 -->
+    <div id="status-bar" class="floating-panel">
+        就绪 - 请在右侧输入绘图需求（右键平移，左键选择）
+    </div>
+
+    <!-- 聊天容器 -->
+    <div id="chat-container" class="floating-panel">
+        <div id="chat-header">
+            <span>AI 几何助手</span>
+        </div>
+        <div id="chat-messages">
+            <div class="message ai">
+                你好！我是你的几何助手。你可以告诉我你想画什么，比如：“画一个正方形 ABCD”。
+            </div>
+        </div>
+        <div id="chat-input-area">
+            <input type="text" id="chat-input" placeholder="描述题目意图..." />
+            <button id="send-btn">发送</button>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        // --- 核心逻辑：形状注册表 ---
+
+        class ShapeRegistry {
+            constructor() {
+                this.shapes = new Map();
+                this.history = []; // 记录操作历史用于撤销
+            }
+            register(id, jxgObject) {
+                if (!jxgObject) return;
+                this.shapes.set(id, jxgObject);
+                this.history.push(id);
+                jxgObject.registryId = id; // 将 ID 反向绑定到对象上
+            }
+            undo(board) {
+                if (this.history.length === 0) return null;
+                const lastId = this.history.pop();
+                const obj = this.shapes.get(lastId);
+                if (obj) {
+                    try {
+                        board.removeObject(obj);
+                    } catch(e) {
+                        console.error('移除对象失败:', e);
+                    }
+                    this.shapes.delete(lastId);
+                }
+                return lastId;
+            }
+            get(id) { return this.shapes.get(id); }
+            exists(id) { return this.shapes.has(id); }
+            clear() { this.shapes.clear(); this.history = []; }
+        }
+
+        // --- 核心逻辑：绘图引擎 ---
+
+        class DrawingEngine {
+            constructor(board, registry) {
+                this.board = board;
+                this.registry = registry;
+            }
+            execute(instructions) {
+                this.board.suspendUpdate();
+                try {
+                    instructions.forEach(ins => this.processInstruction(ins));
+                } catch (err) {
+                    console.error('指令执行失败:', err);
+                } finally {
+                    this.board.unsuspendUpdate();
+                }
+            }
+            processInstruction(ins) {
+                const { action, params, result_id, label } = ins;
+                let obj = null;
+                const commonAttr = { name: label || '', withLabel: !!label, size: 3, strokeWidth: 2 };
+
+                try {
+                    switch (action) {
+                        case 'place_point':
+                            obj = this.board.create('point', [params.x, params.y], commonAttr);
+                            break;
+                        case 'segment':
+                            obj = this.board.create('segment', [this.registry.get(params.p1), this.registry.get(params.p2)], {
+                                ...commonAttr, draggable: true
+                            });
+                            break;
+                        case 'midpoint':
+                            obj = this.board.create('midpoint', [this.registry.get(params.p1), this.registry.get(params.p2)], commonAttr);
+                            break;
+                        case 'perpendicular':
+                            obj = this.board.create('perpendicular', [this.registry.get(params.line), this.registry.get(params.point)], commonAttr);
+                            break;
+                        case 'parallel':
+                            obj = this.board.create('parallel', [this.registry.get(params.line), this.registry.get(params.point)], commonAttr);
+                            break;
+                        case 'circle':
+                            const center = this.registry.get(params.center);
+                            const through = this.registry.get(params.through);
+                            obj = this.board.create('circle', [center, through], {
+                                ...commonAttr, draggable: true, hasInnerPoints: true
+                            });
+                            break;
+                        case 'polygon':
+                            const pts = params.points.map(id => this.registry.get(id));
+                            obj = this.board.create('polygon', pts, {
+                                ...commonAttr, fillColor: '#1890ff', fillOpacity: 0.2,
+                                draggable: true, hasInnerPoints: true
+                            });
+                            break;
+                        case 'glider':
+                            obj = this.board.create('glider', [params.x, params.y, this.registry.get(params.path)], {
+                                ...commonAttr, strokeColor: '#ff4d4f', fillColor: '#fff'
+                            });
+                            break;
+                    }
+                } catch (e) {
+                    console.error('创建形状失败:', e);
+                }
+
+                if (obj && result_id) {
+                    this.registry.register(result_id, obj);
+                }
+            }
+        }
+
+        // --- 辅助函数：查找鼠标下的对象 (简化版，只找有 registryId 的或明确类型的) ---
+        function getTargetUnderMouse(board, e) {
+            const elements = board.getAllObjectsUnderMouse(e);
+            if (!elements || elements.length === 0) return null;
+
+            // 找点
+            const point = elements.find(el => el.elType === 'point' || el.elType === 'glider');
+            if (point) return { type: 'point', obj: point };
+            
+            // 找路径
+            const path = elements.find(el => el.elType === 'segment' || el.elType === 'line' || el.elType === 'circle');
+            if (path) return { type: 'path', obj: path };
+            
+            return null;
+        }
+
+        // --- 初始化应用 ---
+
+        const board = JXG.JSXGraph.initBoard('jxgbox', {
+            boundingbox: [-10, 10, 10, -10], 
+            axis: false, grid: true, showCopyright: false, keepaspectratio: true,
+            shownavigation: true, browserContext: 'ignore',
+            pan: { enabled: true, needTwoFingers: false, needShift: false },
+            zoom: { wheel: true, needShift: false }
+        });
+
+        const registry = new ShapeRegistry();
+        const engine = new DrawingEngine(board, registry);
+
+        // --- 手动绘图状态机 (高性能预览版) ---
+
+        let activeTool = '选择';
+        let point1Id = null; // 存储线段/圆的第一个点
+        
+        // 预览专用的临时对象
+        let ghostPoint = null;
+        let ghostShape = null;
+
+        const toolButtons = document.querySelectorAll('.tool-btn');
+        toolButtons.forEach(btn => {
+            btn.addEventListener('click', function() {
+                if (this.id === 'clear-btn') {
+                    location.reload(); 
+                    return;
+                }
+                if (this.id === 'undo-btn') {
+                    const id = registry.undo(board);
+                    updateStatus(id ? `已撤销上一步操作` : '没有可撤销的操作');
+                    resetDrawState();
+                    return;
+                }
+                
+                toolButtons.forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                activeTool = this.getAttribute('title');
+                
+                resetDrawState(); 
+                board.setAttribute({ browsing: { enabled: (activeTool === '选择') } });
+                updateStatus(`当前工具：${activeTool}`);
+            });
+        });
+
+        // 清理绘制状态和预览图形
+        function resetDrawState() {
+            point1Id = null;
+            if (ghostShape) { board.removeObject(ghostShape); ghostShape = null; }
+            if (ghostPoint) { board.removeObject(ghostPoint); ghostPoint = null; }
+        }
+
+        board.on('down', function(e) {
+            if (activeTool === '选择' || activeTool === '撤销') return;
+            
+            const target = getTargetUnderMouse(board, e);
+            const coords = board.getUsrCoordsOfMouse(e);
+            let x = coords[0], y = coords[1];
+            let currentPointId = null;
+
+            // 1. 获取或创建当前点击的点
+            if (target && target.type === 'point' && target.obj.registryId) {
+                currentPointId = target.obj.registryId;
+                updateStatus(`选中已有点`);
+            } else if (target && target.type === 'path' && target.obj.registryId) {
+                currentPointId = `glider_${Date.now()}`;
+                engine.execute([{ 
+                    action: 'glider', params: { x, y, path: target.obj.registryId }, result_id: currentPointId 
+                }]);
+                updateStatus(`创建路径上的点`);
+            } else {
+                currentPointId = `p_${Date.now()}`;
+                engine.execute([{ 
+                    action: 'place_point', params: { x, y }, result_id: currentPointId 
+                }]);
+            }
+
+            // 2. 根据工具执行后续逻辑
+            if (activeTool === '点') {
+                updateStatus('点创建完成');
+            } else if (activeTool === '线段' || activeTool === '圆') {
+                if (!point1Id) {
+                    // --- 第一下点击：记录起点，并创建幽灵预览对象 ---
+                    point1Id = currentPointId;
+                    updateStatus(`已确定起点，请点击第二个点`);
+                    
+                    const p1Obj = registry.get(point1Id);
+                    // 创建隐藏的幽灵点
+                    ghostPoint = board.create('point', [x, y], { visible: false, name: '' });
+                    
+                    // 根据工具创建虚线预览图形
+                    if (activeTool === '线段') {
+                        ghostShape = board.create('segment', [p1Obj, ghostPoint], { 
+                            dash: 2, strokeColor: '#999', strokeWidth: 1, highlight: false 
+                        });
+                    } else if (activeTool === '圆') {
+                        ghostShape = board.create('circle', [p1Obj, ghostPoint], { 
+                            dash: 2, strokeColor: '#999', strokeWidth: 1, fillColor: 'none', highlight: false 
+                        });
+                    }
+                } else {
+                    // --- 第二下点击：完成绘制，清理幽灵对象 ---
+                    if (point1Id !== currentPointId) {
+                        const action = activeTool === '线段' ? 'segment' : 'circle';
+                        const params = activeTool === '线段' ? { p1: point1Id, p2: currentPointId } : { center: point1Id, through: currentPointId };
+                        
+                        // 先清理预览，再让引擎执行真正的指令
+                        resetDrawState();
+                        engine.execute([{ action: action, params: params, result_id: `shape_${Date.now()}` }]);
+                        updateStatus(`${activeTool}绘制完成`);
+                    } else {
+                        updateStatus('起点和终点不能相同，请重新选择');
+                    }
+                }
+            }
+        });
+
+        // 监听鼠标移动，实时更新幽灵点的坐标以实现高性能预览
+        board.on('move', function(e) {
+            if (point1Id && ghostPoint) {
+                const coords = board.getUsrCoordsOfMouse(e);
+                // 使用 JXG.COORDS_BY_USER 更新点坐标
+                ghostPoint.setPosition(JXG.COORDS_BY_USER, coords);
+                board.update(); // 仅通知画板更新
+            }
+        });
+
+
+        // --- AI 聊天与 DSL 模拟接口 ---
+
+        function updateStatus(text) { document.getElementById('status-bar').textContent = text; }
+
+        document.getElementById('send-btn').onclick = function() {
+            const input = document.getElementById('chat-input');
+            const text = input.value.trim();
+            if (text) { handleUserMessage(text); input.value = ''; }
+        };
+
+        // 监听回车键发送
+        document.getElementById('chat-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                const text = this.value.trim();
+                if (text) { handleUserMessage(text); this.value = ''; }
+            }
+        });
+
+        // 生成给 AI 的当前画板上下文
+        function getBoardContextForAI() {
+            const state = registry.serialize();
+            if (state.length === 0) return "当前画板为空。";
+            return "当前画板已有对象:\n" + JSON.stringify(state, null, 2);
+        }
+
+        function handleUserMessage(text) {
+            appendMessage('user', text);
+            updateStatus('AI 正在分析题意并绘图...');
+
+            const context = getBoardContextForAI();
+            console.log("发送给 AI 的上下文:", context);
+            console.log("用户输入:", text);
+
+            // 模拟真实 API 调用延迟
+            setTimeout(() => {
+                let instructions = [];
+                let responseText = '';
+
+                // 这里是硬编码的模拟逻辑。在实际应用中，这里将是一个 fetch/axios 请求，
+                // 将 context 和 text 发送给 OpenAI/Gemini，并期望返回 JSON。
+                try {
+                    if (text.includes('正方形')) {
+                        instructions = [
+                            { action: 'place_point', params: { x: -2, y: 2 }, result_id: 'A', label: 'A' },
+                            { action: 'place_point', params: { x: 2, y: 2 }, result_id: 'B', label: 'B' },
+                            { action: 'place_point', params: { x: 2, y: -2 }, result_id: 'C', label: 'C' },
+                            { action: 'place_point', params: { x: -2, y: -2 }, result_id: 'D', label: 'D' },
+                            { action: 'polygon', params: { points: ['A', 'B', 'C', 'D'] }, result_id: 'sq1' }
+                        ];
+                        responseText = '我已经为您绘制了正方形 ABCD。您可以直接用鼠标拖动它。';
+                    } else if (text.includes('对角线')) {
+                        if (registry.exists('A') && registry.exists('C') && registry.exists('B') && registry.exists('D')) {
+                            instructions = [
+                                { action: 'segment', params: { p1: 'A', p2: 'C' }, result_id: 'AC' },
+                                { action: 'segment', params: { p1: 'B', p2: 'D' }, result_id: 'BD' }
+                            ];
+                            responseText = '已连接对角线 AC 和 BD。';
+                        } else {
+                            responseText = '请先绘制正方形 ABCD。';
+                        }
+                    } else if (text.includes('中点')) {
+                        // 尝试从用户的输入中猜测线段名称，这里做个极其简单的正则模拟
+                        const match = text.match(/([A-Z])\s*([A-Z])的中点/);
+                        if (match) {
+                            const p1 = match[1];
+                            const p2 = match[2];
+                            if (registry.exists(p1) && registry.exists(p2)) {
+                                instructions = [{ action: 'midpoint', params: { p1: p1, p2: p2 }, result_id: `M_${p1}${p2}`, label: 'M' }];
+                                responseText = `已作 ${p1}${p2} 的中点 M。`;
+                            } else {
+                                responseText = `画板上找不到点 ${p1} 和 ${p2}。`;
+                            }
+                        } else if (registry.exists('A') && registry.exists('B')) {
+                            instructions = [{ action: 'midpoint', params: { p1: 'A', p2: 'B' }, result_id: 'M', label: 'M' }];
+                            responseText = '已找到线段 AB 的中点 M。';
+                        } else { 
+                            responseText = '请明确指出要找哪条线段的中点，或先绘制点 A 和 B。'; 
+                        }
+                    } else if (text.includes('等边三角形') || text.includes('正三角形')) {
+                         instructions = [
+                            { action: 'place_point', params: { x: -2, y: -1 }, result_id: 'E', label: 'E' },
+                            { action: 'place_point', params: { x: 2, y: -1 }, result_id: 'F', label: 'F' },
+                            { action: 'place_point', params: { x: 0, y: 2.464 }, result_id: 'G', label: 'G' }, // 近似值
+                            { action: 'polygon', params: { points: ['E', 'F', 'G'] }, result_id: 'tri1' }
+                        ];
+                        responseText = '画了一个等边三角形 EFG。';
+                    }
+                    else { 
+                        responseText = '我是一个演示版本的几何 AI。请尝试说：“画一个正方形”、“连接对角线” 或 “找 AB 的中点”。'; 
+                    }
+
+                    if (instructions.length > 0) {
+                        engine.execute(instructions);
+                    }
+                } catch(e) {
+                    console.error("AI 响应处理错误", e);
+                    responseText = "抱歉，在处理指令时发生了错误。";
+                }
+
+                appendMessage('ai', responseText);
+                updateStatus('就绪');
+            }, 1000);
+        }
+
+        function appendMessage(role, text) {
+            const container = document.getElementById('chat-messages');
+            const div = document.createElement('div');
+            div.className = `message ${role}`;
+            div.textContent = text;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        window.onresize = function() { board.resizeContainer(window.innerWidth, window.innerHeight); };
+    </script>
+</body>
+</html>
