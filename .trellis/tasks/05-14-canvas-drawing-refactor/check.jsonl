@@ -1,0 +1,5 @@
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend spec index for quality review."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Verify JSXGraph helper and interaction patterns."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Verify visual consistency, drag-and-drop, and label editing."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Verify JavaScript naming and validation conventions."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check for unnecessary duplication after refactor."}

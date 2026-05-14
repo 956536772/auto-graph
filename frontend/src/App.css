@@ -39,6 +39,19 @@ body, html {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+}
+
+.tool-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tool-group + .tool-group {
+  padding-top: 12px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
 }
 
 .tool-btn {
@@ -63,6 +76,12 @@ body, html {
 .tool-btn.active {
   background: var(--primary-color);
   color: white;
+}
+
+.tool-glyph {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 #chat-container {
@@ -155,8 +174,23 @@ body, html {
   }
   #toolbar {
       top: 20px;
-      left: 50%;
-      transform: translateX(-50%);
+      left: 20px;
+      right: 20px;
+      transform: none;
       flex-direction: row;
+      justify-content: center;
+      flex-wrap: wrap;
+      max-height: none;
+  }
+  .tool-group {
+      flex-direction: row;
+      flex-wrap: wrap;
+      justify-content: center;
+  }
+  .tool-group + .tool-group {
+      padding-top: 0;
+      padding-left: 12px;
+      border-top: none;
+      border-left: 1px solid rgba(0, 0, 0, 0.08);
   }
 }

@@ -3,6 +3,7 @@ package com.autograph.backend.chat;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -84,5 +85,21 @@ final class ContextIndex {
             index++;
         }
         return preferred + index;
+    }
+
+    List<Map<String, Object>> toLlmSummary() {
+        return objects.stream()
+            .map(obj -> Map.<String, Object>of(
+                "id", obj.id(),
+                "type", obj.type(),
+                "label", Objects.toString(obj.label(), ""),
+                "order", obj.order(),
+                "position", obj.anchor() == null ? Map.of() : Map.of("x", obj.anchor().x(), "y", obj.anchor().y()),
+                "center", obj.center() == null ? Map.of() : Map.of("x", obj.center().x(), "y", obj.center().y()),
+                "radius", obj.radius() == null ? 0d : obj.radius(),
+                "endpointLabels", obj.endpointLabels(),
+                "centerLabel", Objects.toString(obj.centerLabel(), "")
+            ))
+            .toList();
     }
 }

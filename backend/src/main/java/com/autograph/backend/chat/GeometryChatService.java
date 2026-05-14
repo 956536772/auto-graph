@@ -19,6 +19,15 @@ public class GeometryChatService {
     static final Set<String> CIRCLE_TYPES = Set.of("circle", "circumcircle", "incircle");
 
     private static final Pattern UPPERCASE_LABEL = Pattern.compile("[A-Z]");
+    private final GeometryLlmClient llmClient;
+
+    public GeometryChatService() {
+        this(GeometryLlmClient.disabled());
+    }
+
+    public GeometryChatService(GeometryLlmClient llmClient) {
+        this.llmClient = llmClient;
+    }
 
     public ChatResponse handle(ChatRequest request) {
         var context = ContextIndex.from(request.context());
@@ -46,6 +55,11 @@ public class GeometryChatService {
     }
 
     private IntentExtraction extractIntent(String text, ContextIndex context) {
+        var llmIntent = llmClient.extractIntent(text, context);
+        if (llmIntent.isPresent()) {
+            return new IntentExtraction(llmIntent.get(), null);
+        }
+
         if (text.isBlank()) {
             return new IntentExtraction(null, null);
         }

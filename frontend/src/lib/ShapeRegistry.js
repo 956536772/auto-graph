@@ -1,31 +1,72 @@
 export class ShapeRegistry {
     constructor() {
         this.shapes = new Map();
-        this.history = []; // 记录操作历史用于撤销
+        this.history = []; // 记录创建顺序用于序列化
+        this.undoStack = [];
+        this.activeUndoBatch = null;
     }
     register(id, jxgObject) {
         if (!jxgObject) return;
         this.shapes.set(id, jxgObject);
         this.history.push(id);
+        if (this.activeUndoBatch) {
+            this.activeUndoBatch.push(id);
+        } else {
+            this.undoStack.push([id]);
+        }
         jxgObject.registryId = id; // 将 ID 反向绑定到对象上
     }
-    undo(board) {
-        if (this.history.length === 0) return null;
-        const lastId = this.history.pop();
-        const obj = this.shapes.get(lastId);
-        if (obj) {
-            try {
-                board.removeObject(obj);
-            } catch(e) {
-                console.error('移除对象失败:', e);
-            }
-            this.shapes.delete(lastId);
+    beginUndoBatch() {
+        this.activeUndoBatch = [];
+    }
+    endUndoBatch() {
+        if (!this.activeUndoBatch) return;
+        if (this.activeUndoBatch.length > 0) {
+            this.undoStack.push(this.activeUndoBatch);
         }
-        return lastId;
+        this.activeUndoBatch = null;
+    }
+    mergeLastUndoEntries(groupCount) {
+        if (groupCount <= 1 || this.undoStack.length < groupCount) {
+            return;
+        }
+        const groups = [];
+        for (let index = 0; index < groupCount; index += 1) {
+            groups.unshift(this.undoStack.pop());
+        }
+        this.undoStack.push(groups.flat());
+    }
+    undo(board) {
+        if (this.undoStack.length === 0) return null;
+        const ids = this.undoStack.pop();
+        const removedIds = [];
+        ids.slice().reverse().forEach((id) => {
+            const obj = this.shapes.get(id);
+            if (obj) {
+                try {
+                    board.removeObject(obj);
+                } catch(e) {
+                    console.error('移除对象失败:', e);
+                }
+                this.shapes.delete(id);
+            }
+            removedIds.push(id);
+        });
+        if (removedIds.length > 0) {
+            const removedSet = new Set(removedIds);
+            this.history = this.history.filter((id) => !removedSet.has(id));
+        }
+        return removedIds.at(-1) || null;
     }
     get(id) { return this.shapes.get(id); }
     exists(id) { return this.shapes.has(id); }
-    clear() { this.shapes.clear(); this.history = []; }
+    entries() { return Array.from(this.shapes.entries()); }
+    clear() {
+        this.shapes.clear();
+        this.history = [];
+        this.undoStack = [];
+        this.activeUndoBatch = null;
+    }
     serialize() {
         return this.history
             .map((id, order) => {
@@ -55,6 +96,12 @@ export class ShapeRegistry {
             if (centerLabel) data.centerLabel = centerLabel;
         }
 
+        if (obj.elType === 'ellipse') {
+            const center = this.pointCoords(obj.center);
+            if (center) data.center = center;
+            if (typeof obj.majorAxis === 'function') data.majorAxis = obj.majorAxis();
+        }
+
         if (this.hasEndpoints(obj)) {
             const endpoints = [obj.point1, obj.point2]
                 .map(point => point ? { id: point.registryId || null, label: this.getLabel(point) || null, ...this.pointCoords(point) } : null)
@@ -72,6 +119,12 @@ export class ShapeRegistry {
             if (vertices.length > 0) {
                 data.vertices = vertices;
             }
+        }
+
+        if (obj.elType === 'angle' && obj.point1 && obj.point2 && obj.point3) {
+            data.points = [obj.point1, obj.point2, obj.point3]
+                .map(point => point ? { id: point.registryId || null, label: this.getLabel(point) || null, ...this.pointCoords(point) } : null)
+                .filter(Boolean);
         }
 
         return data;

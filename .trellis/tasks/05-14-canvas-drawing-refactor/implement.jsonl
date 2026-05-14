@@ -1,0 +1,7 @@
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend spec index for canvas refactor work."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"JSXGraph helper and interaction patterns for frontend components."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Board state and local state management conventions."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Vanilla JavaScript naming and manual validation guidance."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Visual consistency and manual verification expectations."}
+{"file":".trellis/spec/guides/index.md","reason":"Shared thinking guide index for implementation."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Refactor introduces reusable geometry and tool helpers."}

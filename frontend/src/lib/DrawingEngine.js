@@ -1,17 +1,29 @@
+import JXG from 'jsxgraph';
+
 export class DrawingEngine {
-    constructor(board, registry) {
+    constructor(board, registry, options = {}) {
         this.board = board;
         this.registry = registry;
+        this.options = options;
     }
     execute(instructions) {
+        const created = [];
+        this.registry.beginUndoBatch?.();
         this.board.suspendUpdate();
         try {
-            instructions.forEach(ins => this.processInstruction(ins));
+            instructions.forEach((ins) => {
+                const obj = this.processInstruction(ins);
+                if (obj) {
+                    created.push({ instruction: ins, object: obj });
+                }
+            });
         } catch (err) {
             console.error('指令执行失败:', err);
         } finally {
             this.board.unsuspendUpdate();
+            this.registry.endUndoBatch?.();
         }
+        return created;
     }
     processInstruction(ins) {
         const { action, params, result_id, label } = ins;
@@ -24,23 +36,29 @@ export class DrawingEngine {
                     obj = this.board.create('point', [params.x, params.y], commonAttr);
                     break;
                 case 'segment':
-                    obj = this.board.create('segment', [this.registry.get(params.p1), this.registry.get(params.p2)], {
+                    obj = this.board.create('segment', [this.resolveRef(params.p1), this.resolveRef(params.p2)], {
                         ...commonAttr, draggable: true
                     });
                     this.addHoverCursor(obj);
                     break;
                 case 'midpoint':
-                    obj = this.board.create('midpoint', [this.registry.get(params.p1), this.registry.get(params.p2)], commonAttr);
+                    obj = this.board.create('midpoint', [this.resolveRef(params.p1), this.resolveRef(params.p2)], commonAttr);
                     break;
                 case 'perpendicular':
-                    obj = this.board.create('perpendicular', [this.registry.get(params.line), this.registry.get(params.point)], commonAttr);
+                    obj = this.board.create('perpendicular', [this.resolveRef(params.line), this.resolveRef(params.point)], {
+                        ...commonAttr, draggable: true
+                    });
+                    this.addHoverCursor(obj);
                     break;
                 case 'parallel':
-                    obj = this.board.create('parallel', [this.registry.get(params.line), this.registry.get(params.point)], commonAttr);
+                    obj = this.board.create('parallel', [this.resolveRef(params.line), this.resolveRef(params.point)], {
+                        ...commonAttr, draggable: true
+                    });
+                    this.addHoverCursor(obj);
                     break;
                 case 'circle': {
-                    const center = this.registry.get(params.center);
-                    const through = this.registry.get(params.through);
+                    const center = this.resolveRef(params.center);
+                    const through = this.resolveRef(params.through);
                     obj = this.board.create('circle', [center, through], {
                         ...commonAttr, draggable: true, hasInnerPoints: true,
                         fillColor: '#1890ff', fillOpacity: 0.1
@@ -50,9 +68,9 @@ export class DrawingEngine {
                 }
                 case 'circumcircle':
                     obj = this.board.create('circumcircle', [
-                        this.registry.get(params.p1),
-                        this.registry.get(params.p2),
-                        this.registry.get(params.p3)
+                        this.resolveRef(params.p1),
+                        this.resolveRef(params.p2),
+                        this.resolveRef(params.p3)
                     ], {
                         ...commonAttr, draggable: true, hasInnerPoints: true,
                         fillColor: '#1890ff', fillOpacity: 0.1
@@ -61,9 +79,9 @@ export class DrawingEngine {
                     break;
                 case 'incircle':
                     obj = this.board.create('incircle', [
-                        this.registry.get(params.p1),
-                        this.registry.get(params.p2),
-                        this.registry.get(params.p3)
+                        this.resolveRef(params.p1),
+                        this.resolveRef(params.p2),
+                        this.resolveRef(params.p3)
                     ], {
                         ...commonAttr, draggable: true, hasInnerPoints: true,
                         fillColor: '#1890ff', fillOpacity: 0.1
@@ -74,40 +92,46 @@ export class DrawingEngine {
                     const { cx, cy, rx, ry } = params;
                     if (Math.abs(rx - ry) < 0.001) {
                         const pCenter = this.board.create('point', [cx, cy], { visible: false, name: '' });
-                        obj = this.board.create('circle', [pCenter, rx], {
+                        const pThrough = this.board.create('point', [cx + rx, cy], { visible: false, name: '' });
+                        obj = this.board.create('circle', [pCenter, pThrough], {
                             ...commonAttr, draggable: true, hasInnerPoints: true,
                             fillColor: '#1890ff', fillOpacity: 0.1
                         });
-                        // 确保移除圆时也移除隐藏的圆心
-                        obj.on('remove', () => this.board.removeObject(pCenter));
+                        this.attachTranslationDrag(obj, [pCenter, pThrough]);
+                        obj.on('remove', () => {
+                            this.safeRemoveObject(pCenter);
+                            this.safeRemoveObject(pThrough);
+                        });
                     } else {
-                        // Linear eccentricity: c^2 = |rx^2 - ry^2|
                         const c = Math.sqrt(Math.abs(rx * rx - ry * ry));
-                        let f1, f2, major;
+                        let f1;
+                        let f2;
+                        let pointOnEllipse;
                         if (rx > ry) {
                             f1 = this.board.create('point', [cx - c, cy], { visible: false, name: '' });
                             f2 = this.board.create('point', [cx + c, cy], { visible: false, name: '' });
-                            major = 2 * rx;
+                            pointOnEllipse = this.board.create('point', [cx + rx, cy], { visible: false, name: '' });
                         } else {
                             f1 = this.board.create('point', [cx, cy - c], { visible: false, name: '' });
                             f2 = this.board.create('point', [cx, cy + c], { visible: false, name: '' });
-                            major = 2 * ry;
+                            pointOnEllipse = this.board.create('point', [cx, cy + ry], { visible: false, name: '' });
                         }
-                        obj = this.board.create('ellipse', [f1, f2, major], {
+                        obj = this.board.create('ellipse', [f1, f2, pointOnEllipse], {
                             ...commonAttr, draggable: true, hasInnerPoints: true,
                             fillColor: '#1890ff', fillOpacity: 0.1
                         });
-                        // 确保移除椭圆时也移除隐藏的焦点
+                        this.attachTranslationDrag(obj, [f1, f2, pointOnEllipse]);
                         obj.on('remove', () => {
-                            this.board.removeObject(f1);
-                            this.board.removeObject(f2);
+                            this.safeRemoveObject(f1);
+                            this.safeRemoveObject(f2);
+                            this.safeRemoveObject(pointOnEllipse);
                         });
                     }
                     this.addHoverCursor(obj);
                     break;
                 }
                 case 'polygon': {
-                    const pts = params.points.map(id => this.registry.get(id));
+                    const pts = params.points.map(id => this.resolveRef(id));
                     obj = this.board.create('polygon', pts, {
                         ...commonAttr, fillColor: '#1890ff', fillOpacity: 0.2,
                         draggable: true, hasInnerPoints: true
@@ -116,34 +140,58 @@ export class DrawingEngine {
                     break;
                 }
                 case 'glider':
-                    obj = this.board.create('glider', [params.x, params.y, this.registry.get(params.path)], {
+                    obj = this.board.create('glider', [params.x, params.y, this.resolveRef(params.path)], {
                         ...commonAttr, strokeColor: '#ff4d4f', fillColor: '#fff'
                     });
                     break;
                 case 'intersection': {
                     obj = this.board.create('intersection', [
-                        this.registry.get(params.first),
-                        this.registry.get(params.second),
+                        this.resolveRef(params.first),
+                        this.resolveRef(params.second),
                         params.index ?? 0
                     ], commonAttr);
                     break;
                 }
                 case 'otherintersection': {
                     obj = this.board.create('otherintersection', [
-                        this.registry.get(params.first),
-                        this.registry.get(params.second),
-                        this.registry.get(params.known)
+                        this.resolveRef(params.first),
+                        this.resolveRef(params.second),
+                        this.resolveRef(params.known)
                     ], commonAttr);
                     break;
                 }
                 case 'tangent':
                     obj = this.board.create('tangent', [
-                        this.registry.get(params.circle),
-                        this.registry.get(params.point)
+                        this.resolveRef(params.circle),
+                        this.resolveRef(params.point)
                     ], {
                         ...commonAttr, draggable: true
                     });
                     this.addHoverCursor(obj);
+                    break;
+                case 'bisector':
+                    obj = this.board.create('bisector', [
+                        this.resolveRef(params.p1),
+                        this.resolveRef(params.vertex),
+                        this.resolveRef(params.p2)
+                    ], {
+                        ...commonAttr, draggable: true
+                    });
+                    this.addHoverCursor(obj);
+                    break;
+                case 'angle':
+                    obj = this.board.create('angle', [
+                        this.resolveRef(params.p1),
+                        this.resolveRef(params.vertex),
+                        this.resolveRef(params.p2)
+                    ], {
+                        ...commonAttr,
+                        radius: 1,
+                        fillColor: '#91caff',
+                        fillOpacity: 0.2,
+                        strokeColor: '#0958d9',
+                        strokeWidth: 2
+                    });
                     break;
             }
         } catch (e) {
@@ -153,9 +201,61 @@ export class DrawingEngine {
         if (obj && result_id) {
             this.registry.register(result_id, obj);
         }
+
+        if (obj && typeof this.options.onObjectCreated === 'function') {
+            this.options.onObjectCreated(obj, ins);
+        }
+
+        return obj;
     }
     addHoverCursor(obj) {
         obj.on('over', () => { document.body.style.cursor = 'move'; });
         obj.on('out', () => { document.body.style.cursor = 'default'; });
+    }
+    resolveRef(ref) {
+        if (!ref) {
+            return null;
+        }
+        return typeof ref === 'string' ? this.registry.get(ref) : ref;
+    }
+    safeRemoveObject(obj) {
+        if (!obj) {
+            return;
+        }
+        try {
+            this.board.removeObject(obj);
+        } catch (error) {
+            console.error('移除辅助对象失败:', error);
+        }
+    }
+    attachTranslationDrag(shape, controlPoints) {
+        let dragOrigin = null;
+
+        shape.on('down', (event) => {
+            const mouse = this.board.getUsrCoordsOfMouse(event);
+            dragOrigin = {
+                mouse: { x: mouse[0], y: mouse[1] },
+                points: controlPoints.map((point) => ({ point, x: point.X(), y: point.Y() }))
+            };
+        });
+
+        shape.on('drag', (event) => {
+            if (!dragOrigin) {
+                return;
+            }
+
+            const mouse = this.board.getUsrCoordsOfMouse(event);
+            const dx = mouse[0] - dragOrigin.mouse.x;
+            const dy = mouse[1] - dragOrigin.mouse.y;
+
+            dragOrigin.points.forEach(({ point, x, y }) => {
+                point.setPosition(JXG.COORDS_BY_USER, [x + dx, y + dy]);
+            });
+            this.board.update();
+        });
+
+        shape.on('up', () => {
+            dragOrigin = null;
+        });
     }
 }

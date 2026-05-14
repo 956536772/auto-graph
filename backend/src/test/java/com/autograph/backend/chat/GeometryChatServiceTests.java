@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 class GeometryChatServiceTests {
 
-    private final GeometryChatService service = new GeometryChatService();
+    private final GeometryChatService service = new GeometryChatService(GeometryLlmClient.disabled());
 
     @Test
     void shouldCompileCircumcircleIntent() {
