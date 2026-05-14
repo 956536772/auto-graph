@@ -11,34 +11,20 @@ export function isValidSize(value) {
   return Math.abs(value) > MIN_SIZE;
 }
 
-export function buildEllipseDefinition(start, end, forceCircle = false) {
-  let dx = end.x - start.x;
-  let dy = end.y - start.y;
-
-  if (forceCircle) {
-    const radius = Math.max(Math.abs(dx), Math.abs(dy));
-    dx = signWithFallback(dx) * radius;
-    dy = signWithFallback(dy, -1) * radius;
-  }
-
-  const rx = Math.abs(dx) / 2;
-  const ry = Math.abs(dy) / 2;
-  const cx = start.x + dx / 2;
-  const cy = start.y + dy / 2;
-  const horizontalMajorAxis = rx >= ry;
-  const focusOffset = Math.sqrt(Math.max(horizontalMajorAxis ? rx * rx - ry * ry : ry * ry - rx * rx, 0));
-  const f1 = horizontalMajorAxis ? { x: cx - focusOffset, y: cy } : { x: cx, y: cy - focusOffset };
-  const f2 = horizontalMajorAxis ? { x: cx + focusOffset, y: cy } : { x: cx, y: cy + focusOffset };
+export function buildCircleDefinition(center, edge) {
+  const dx = edge.x - center.x;
+  const dy = edge.y - center.y;
+  const radius = Math.hypot(dx, dy);
 
   return {
-    cx,
-    cy,
-    rx,
-    ry,
-    majorAxis: horizontalMajorAxis ? 2 * rx : 2 * ry,
-    f1,
-    f2,
-    valid: isValidSize(rx) && isValidSize(ry)
+    cx: center.x,
+    cy: center.y,
+    radius,
+    edge: {
+      x: edge.x,
+      y: edge.y
+    },
+    valid: isValidSize(radius)
   };
 }
 

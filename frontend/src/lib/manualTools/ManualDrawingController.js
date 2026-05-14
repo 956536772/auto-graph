@@ -1,7 +1,7 @@
 import JXG from 'jsxgraph';
 import { TOOLS, shouldAutoReturnToSelect } from './constants.js';
 import {
-  buildEllipseDefinition,
+  buildCircleDefinition,
   buildIsoscelesTriangleVertices,
   buildRectangleVertices,
   sameGeometryObject
@@ -11,6 +11,8 @@ import { getNextPointLabel, openPointLabelEditor } from './labels.js';
 const POINT_TYPES = new Set(['point', 'glider']);
 const PATH_TYPES = new Set(['segment', 'line', 'circle', 'ellipse']);
 const LINEAR_PATH_TYPES = new Set(['segment', 'line']);
+const SELECTABLE_TYPES = new Set(['point', 'glider', 'segment', 'line', 'circle', 'ellipse', 'polygon', 'angle']);
+const SNAP_RADIUS_PX = 14;
 const PREVIEW_ATTRS = {
   dash: 2,
   strokeColor: '#999',
@@ -36,8 +38,13 @@ function createInitialState() {
     dragStart: null,
     pendingUndoGroupCount: 0,
     previewMajorAxis: 0,
+    previewKind: null,
     previewShape: null,
     previewPoints: [],
+    segmentChainPoints: [],
+    segmentIds: [],
+    selectedObject: null,
+    selectedSnapshot: null,
     selectedPoints: [],
     selectedPath: null,
     segmentStart: null
@@ -58,20 +65,27 @@ export class ManualDrawingController {
     this.handleDown = this.handleDown.bind(this);
     this.handleMove = this.handleMove.bind(this);
     this.handleUp = this.handleUp.bind(this);
+    this.handleDoubleClick = this.handleDoubleClick.bind(this);
     this.handleKeyDown = this.handleKeyDown.bind(this);
+    this.closeObjectMenu = this.closeObjectMenu.bind(this);
 
     this.board.on('down', this.handleDown);
     this.board.on('move', this.handleMove);
     this.board.on('up', this.handleUp);
+    this.board.on('dblclick', this.handleDoubleClick);
     window.addEventListener('keydown', this.handleKeyDown);
+    window.addEventListener('pointerdown', this.closeObjectMenu);
   }
 
   destroy() {
     this.resetState();
+    this.removeObjectMenu();
     this.board.off('down', this.handleDown);
     this.board.off('move', this.handleMove);
     this.board.off('up', this.handleUp);
+    this.board.off('dblclick', this.handleDoubleClick);
     window.removeEventListener('keydown', this.handleKeyDown);
+    window.removeEventListener('pointerdown', this.closeObjectMenu);
   }
 
   setActiveTool(tool) {
@@ -87,6 +101,8 @@ export class ManualDrawingController {
       this.discardPendingGroups();
     }
     this.clearPreview();
+    this.clearSelection();
+    this.closeObjectMenu();
     this.state = createInitialState();
   }
 
@@ -110,6 +126,9 @@ export class ManualDrawingController {
 
   handleDown(event) {
     switch (this.activeTool) {
+      case TOOLS.SELECT:
+        this.handleSelectTool(event);
+        return;
       case TOOLS.POINT:
         this.handlePointTool(event);
         return;
@@ -180,10 +199,9 @@ export class ManualDrawingController {
 
   handleMove(event) {
     if (!this.state.dragStart) {
-      if (this.activeTool === TOOLS.SEGMENT && this.state.segmentStart && this.state.previewPoints[0]) {
-        const coords = this.getMousePosition(event);
-        this.state.previewPoints[0].setPosition(JXG.COORDS_BY_USER, [coords.x, coords.y]);
-        this.board.update();
+      if (this.activeTool === TOOLS.SEGMENT && this.state.segmentStart && this.state.previewShape) {
+        const coords = this.getSnappedPosition(event);
+        this.updateSegmentPreview(coords);
       }
       return;
     }
@@ -191,7 +209,7 @@ export class ManualDrawingController {
     const end = this.getMousePosition(event);
 
     if (this.activeTool === TOOLS.CIRCLE) {
-      this.updateEllipsePreview(buildEllipseDefinition(this.state.dragStart, end, event.shiftKey));
+      this.updateCirclePreview(buildCircleDefinition(this.state.dragStart, end));
       return;
     }
 
@@ -213,19 +231,19 @@ export class ManualDrawingController {
     const end = this.getMousePosition(event);
 
     if (this.activeTool === TOOLS.CIRCLE) {
-      const definition = buildEllipseDefinition(this.state.dragStart, end, event.shiftKey);
+      const definition = buildCircleDefinition(this.state.dragStart, end);
       if (definition.valid) {
         this.engine.execute([{
-          action: 'ellipse',
+          action: 'circle',
           params: {
             cx: definition.cx,
             cy: definition.cy,
-            rx: definition.rx,
-            ry: definition.ry
+            radius: definition.radius,
+            centerLabel: 'O'
           },
-          result_id: this.nextId('ellipse')
+          result_id: this.nextId('circle')
         }]);
-        this.completeAndReturn('圆或椭圆绘制完成');
+        this.completeAndReturn('圆绘制完成');
         return;
       }
     }
@@ -252,6 +270,36 @@ export class ManualDrawingController {
     this.onStatusChange('拖拽距离过小，未创建图形');
   }
 
+  handleSelectTool(event) {
+    const target = this.getTargetUnderMouse(event, { includeShapes: true }) || this.getNearestSnapTarget(event, { includePath: true });
+    if (!target) {
+      this.clearSelection();
+      this.closeObjectMenu();
+      return;
+    }
+
+    this.selectObject(target.obj);
+    this.onStatusChange('已选中对象，双击可打开操作菜单');
+  }
+
+  handleDoubleClick(event) {
+    const target = this.getTargetUnderMouse(event, { includeShapes: true }) || this.getNearestSnapTarget(event, { includePath: true });
+    if (!target) {
+      this.closeObjectMenu();
+      return;
+    }
+
+    if (event?.preventDefault) {
+      event.preventDefault();
+    }
+    if (event?.stopPropagation) {
+      event.stopPropagation();
+    }
+
+    this.selectObject(target.obj);
+    this.showObjectMenu(event, target.obj);
+  }
+
   handlePointTool(event) {
     const point = this.resolvePointSelection(event, { allowCreate: true, allowGlider: true });
     if (!point) {
@@ -269,6 +317,7 @@ export class ManualDrawingController {
 
     if (!this.state.segmentStart) {
       this.state.segmentStart = point;
+      this.state.segmentChainPoints = [point];
       this.createSegmentPreview(point);
       this.onStatusChange('已确定起点，点击下一个点继续折线，按 Esc 退出');
       return;
@@ -279,17 +328,38 @@ export class ManualDrawingController {
       return;
     }
 
+    const segmentId = this.nextId('segment');
     this.engine.execute([{
       action: 'segment',
       params: {
         p1: this.toReference(this.state.segmentStart),
         p2: this.toReference(point)
       },
-      result_id: this.nextId('segment')
+      result_id: segmentId
     }]);
+    this.state.segmentIds.push(segmentId);
+
+    if (this.isClosingSegmentChain(point)) {
+      const polygonId = this.nextId('closed_polygon');
+      this.engine.execute([{
+        action: 'polygon',
+        params: {
+          points: this.state.segmentChainPoints.map((chainPoint) => this.toReference(chainPoint))
+        },
+        result_id: polygonId,
+        meta: {
+          closedSegmentIds: [...this.state.segmentIds]
+        }
+      }]);
+      this.commitPendingGroups(2);
+      this.completeAndReturn('封闭图形已创建：保留边并生成整体图形', { forceSelect: true });
+      return;
+    }
+
     this.commitPendingGroups(1);
 
     this.state.segmentStart = point;
+    this.state.segmentChainPoints.push(point);
     this.clearPreview();
     this.createSegmentPreview(point);
     this.onStatusChange('线段已创建，继续点击下一个点，或按 Esc 退出');
@@ -388,31 +458,41 @@ export class ManualDrawingController {
   }
 
   createSegmentPreview(point) {
-    // JSXGraph can leave an invalid line object when a segment preview is tied to a hidden point.
-    // Keep chained segment creation stable and omit the transient preview for now.
-    void point;
-    this.state.previewPoints = [];
-    this.state.previewShape = null;
+    const previewShape = this.board.create('curve', [[point.X(), point.X()], [point.Y(), point.Y()]], {
+      ...PREVIEW_ATTRS,
+      strokeColor: '#1890ff',
+      fillColor: 'none'
+    });
+    this.state.previewKind = 'segment';
+    this.state.previewShape = previewShape;
   }
 
-  updateEllipsePreview(definition) {
+  updateSegmentPreview(end) {
+    if (!this.state.previewShape || !this.state.segmentStart) {
+      return;
+    }
+
+    this.state.previewShape.dataX = [this.state.segmentStart.X(), end.x];
+    this.state.previewShape.dataY = [this.state.segmentStart.Y(), end.y];
+    this.board.update();
+  }
+
+  updateCirclePreview(definition) {
     if (!definition.valid && !this.state.previewShape) {
       return;
     }
 
     if (!this.state.previewShape) {
-      const focus1 = this.board.create('point', [definition.f1.x, definition.f1.y], HIDDEN_PREVIEW_POINT_ATTRS);
-      const focus2 = this.board.create('point', [definition.f2.x, definition.f2.y], HIDDEN_PREVIEW_POINT_ATTRS);
-      this.state.previewMajorAxis = definition.majorAxis;
-      const previewShape = this.board.create('ellipse', [
-        focus1,
-        focus2,
-        () => this.state.previewMajorAxis
+      const center = this.board.create('point', [definition.cx, definition.cy], HIDDEN_PREVIEW_POINT_ATTRS);
+      const edge = this.board.create('point', [definition.edge.x, definition.edge.y], HIDDEN_PREVIEW_POINT_ATTRS);
+      const previewShape = this.board.create('circle', [
+        center,
+        edge
       ], {
         ...PREVIEW_ATTRS,
         fillColor: 'none'
       });
-      this.state.previewPoints = [focus1, focus2];
+      this.state.previewPoints = [center, edge];
       this.state.previewShape = previewShape;
     }
 
@@ -420,9 +500,8 @@ export class ManualDrawingController {
       return;
     }
 
-    this.state.previewMajorAxis = definition.majorAxis;
-    this.state.previewPoints[0].setPosition(JXG.COORDS_BY_USER, [definition.f1.x, definition.f1.y]);
-    this.state.previewPoints[1].setPosition(JXG.COORDS_BY_USER, [definition.f2.x, definition.f2.y]);
+    this.state.previewPoints[0].setPosition(JXG.COORDS_BY_USER, [definition.cx, definition.cy]);
+    this.state.previewPoints[1].setPosition(JXG.COORDS_BY_USER, [definition.edge.x, definition.edge.y]);
     this.board.update();
   }
 
@@ -463,24 +542,27 @@ export class ManualDrawingController {
     });
 
     this.state.previewShape = null;
+    this.state.previewKind = null;
     this.state.previewPoints = [];
   }
 
   resolvePointSelection(event, { allowCreate, allowGlider }) {
-    const target = this.getTargetUnderMouse(event);
-    const coords = this.getMousePosition(event);
+    const directTarget = this.getTargetUnderMouse(event);
+    const snapTarget = directTarget || this.getNearestSnapTarget(event, { includePath: allowGlider });
+    const coords = this.getSnappedPosition(event, snapTarget);
 
-    if (target?.type === 'point') {
-      return target.obj;
+    if (snapTarget?.type === 'point') {
+      this.selectObject(snapTarget.obj);
+      return snapTarget.obj;
     }
 
-    if (allowGlider && target?.type === 'path') {
+    if (allowGlider && snapTarget?.type === 'path') {
       return this.createPointFromInstruction({
         action: 'glider',
         params: {
           x: coords.x,
           y: coords.y,
-          path: this.toReference(target.obj)
+          path: this.toReference(snapTarget.obj)
         }
       });
     }
@@ -520,6 +602,10 @@ export class ManualDrawingController {
     }
   }
 
+  isClosingSegmentChain(point) {
+    return this.state.segmentChainPoints.length >= 3 && sameGeometryObject(this.state.segmentChainPoints[0], point);
+  }
+
   commitPendingGroups(currentGroupCount = 0) {
     const totalGroups = this.state.pendingUndoGroupCount + currentGroupCount;
     if (totalGroups > 1) {
@@ -550,7 +636,7 @@ export class ManualDrawingController {
   getDragStatus() {
     switch (this.activeTool) {
       case TOOLS.CIRCLE:
-        return '拖动鼠标绘制圆或椭圆，按住 Shift 画正圆';
+        return '按住圆心并拖动半径绘制圆';
       case TOOLS.RECTANGLE:
         return '拖动鼠标绘制矩形，按住 Shift 画正方形';
       case TOOLS.TRIANGLE:
@@ -560,7 +646,7 @@ export class ManualDrawingController {
     }
   }
 
-  getTargetUnderMouse(event) {
+  getTargetUnderMouse(event, options = {}) {
     const elements = this.board.getAllObjectsUnderMouse(event) || [];
     if (elements.length === 0) {
       return null;
@@ -576,12 +662,161 @@ export class ManualDrawingController {
       return { type: 'path', obj: path };
     }
 
+    if (options.includeShapes) {
+      const shape = elements.find((element) => SELECTABLE_TYPES.has(element.elType) && element.visProp?.visible !== false);
+      if (shape) {
+        return { type: shape.elType === 'point' || shape.elType === 'glider' ? 'point' : 'shape', obj: shape };
+      }
+    }
+
     return null;
+  }
+
+  getNearestSnapTarget(event, options = {}) {
+    const mouse = this.getMousePosition(event);
+    let nearest = null;
+
+    this.registry.entries().forEach(([, obj]) => {
+      if (!obj || obj.visProp?.visible === false) {
+        return;
+      }
+
+      if (POINT_TYPES.has(obj.elType)) {
+        const distance = this.distanceToPointPx(mouse, obj);
+        if (distance <= SNAP_RADIUS_PX && (!nearest || distance < nearest.distance)) {
+          nearest = { type: 'point', obj, distance };
+        }
+        return;
+      }
+
+      if (options.includePath && PATH_TYPES.has(obj.elType) && typeof obj.hasPoint === 'function') {
+        const screen = this.toScreenCoords(mouse);
+        if (obj.hasPoint(screen.x, screen.y)) {
+          nearest = { type: 'path', obj, distance: SNAP_RADIUS_PX };
+        }
+      }
+    });
+
+    return nearest;
   }
 
   getMousePosition(event) {
     const coords = this.board.getUsrCoordsOfMouse(event);
     return { x: coords[0], y: coords[1] };
+  }
+
+  getSnappedPosition(event, snapTarget = null) {
+    const target = snapTarget || this.getNearestSnapTarget(event, { includePath: true });
+    if (target?.type === 'point') {
+      return { x: target.obj.X(), y: target.obj.Y() };
+    }
+    return this.getMousePosition(event);
+  }
+
+  distanceToPointPx(mouse, point) {
+    const screen = this.toScreenCoords(mouse);
+    const pointScreen = this.toScreenCoords({ x: point.X(), y: point.Y() });
+    return Math.hypot(screen.x - pointScreen.x, screen.y - pointScreen.y);
+  }
+
+  toScreenCoords(coords) {
+    return {
+      x: this.board.origin.scrCoords[1] + coords.x * this.board.unitX,
+      y: this.board.origin.scrCoords[2] - coords.y * this.board.unitY
+    };
+  }
+
+  selectObject(obj) {
+    if (!obj || this.state.selectedObject === obj) {
+      return;
+    }
+
+    this.clearSelection();
+    this.state.selectedObject = obj;
+    this.state.selectedSnapshot = this.readHighlightSnapshot(obj);
+    this.applyHighlight(obj);
+    this.board.update();
+  }
+
+  clearSelection() {
+    if (!this.state.selectedObject) {
+      return;
+    }
+
+    this.restoreHighlight(this.state.selectedObject, this.state.selectedSnapshot);
+    this.state.selectedObject = null;
+    this.state.selectedSnapshot = null;
+    this.board.update();
+  }
+
+  readHighlightSnapshot(obj) {
+    return {
+      strokeColor: obj.visProp?.strokecolor,
+      fillColor: obj.visProp?.fillcolor,
+      strokeWidth: obj.visProp?.strokewidth,
+      fillOpacity: obj.visProp?.fillopacity
+    };
+  }
+
+  applyHighlight(obj) {
+    obj.setAttribute({
+      strokeColor: '#fa8c16',
+      strokeWidth: Math.max(Number(obj.visProp?.strokewidth) || 2, 4),
+      fillColor: obj.elType === 'point' || obj.elType === 'glider' ? '#fa8c16' : '#fff7e6',
+      fillOpacity: obj.elType === 'point' || obj.elType === 'glider' ? 1 : 0.32
+    });
+  }
+
+  restoreHighlight(obj, snapshot) {
+    if (!obj || !snapshot) {
+      return;
+    }
+    obj.setAttribute({
+      strokeColor: snapshot.strokeColor,
+      strokeWidth: snapshot.strokeWidth,
+      fillColor: snapshot.fillColor,
+      fillOpacity: snapshot.fillOpacity
+    });
+  }
+
+  showObjectMenu(event, obj) {
+    this.removeObjectMenu();
+    const menu = document.createElement('div');
+    menu.className = 'object-action-menu';
+    menu.innerHTML = '<button type="button">删除</button>';
+    menu.style.left = `${event.clientX + 8}px`;
+    menu.style.top = `${event.clientY + 8}px`;
+    menu.addEventListener('pointerdown', (menuEvent) => {
+      menuEvent.stopPropagation();
+    });
+    menu.querySelector('button').addEventListener('click', () => {
+      this.deleteObject(obj);
+    });
+    document.body.appendChild(menu);
+    this.objectMenu = menu;
+  }
+
+  closeObjectMenu(event) {
+    if (event && this.objectMenu?.contains(event.target)) {
+      return;
+    }
+    this.removeObjectMenu();
+  }
+
+  removeObjectMenu() {
+    if (this.objectMenu) {
+      this.objectMenu.remove();
+      this.objectMenu = null;
+    }
+  }
+
+  deleteObject(obj) {
+    const target = obj || this.state.selectedObject;
+    this.clearSelection();
+    const removedId = this.registry.removeObject(this.board, target);
+    this.removeObjectMenu();
+    this.onStatusChange(removedId ? '对象已删除' : '没有找到可删除对象');
+    this.board.update();
   }
 
   nextId(prefix) {

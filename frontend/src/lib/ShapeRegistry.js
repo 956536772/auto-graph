@@ -16,6 +16,16 @@ export class ShapeRegistry {
         }
         jxgObject.registryId = id; // 将 ID 反向绑定到对象上
     }
+    idForObject(jxgObject) {
+        if (!jxgObject) return null;
+        if (jxgObject.registryId && this.shapes.get(jxgObject.registryId) === jxgObject) {
+            return jxgObject.registryId;
+        }
+        for (const [id, obj] of this.shapes.entries()) {
+            if (obj === jxgObject) return id;
+        }
+        return null;
+    }
     beginUndoBatch() {
         this.activeUndoBatch = [];
     }
@@ -56,6 +66,66 @@ export class ShapeRegistry {
             const removedSet = new Set(removedIds);
             this.history = this.history.filter((id) => !removedSet.has(id));
         }
+        return removedIds.at(-1) || null;
+    }
+    removeObject(board, jxgObject) {
+        const id = this.idForObject(jxgObject);
+        if (!id) return null;
+        return this.removeIds(board, this.collectDependentIds([id]));
+    }
+    collectDependentIds(rootIds) {
+        const ids = new Set(rootIds);
+        let changed = true;
+
+        while (changed) {
+            changed = false;
+            for (const [candidateId, obj] of this.shapes.entries()) {
+                if (ids.has(candidateId)) continue;
+                const dependsOnRemoved = Array.from(ids).some((id) => this.dependsOn(obj, this.shapes.get(id)));
+                if (dependsOnRemoved) {
+                    ids.add(candidateId);
+                    changed = true;
+                }
+            }
+        }
+
+        return Array.from(ids);
+    }
+    dependsOn(obj, target) {
+        if (!obj || !target) return false;
+        if (obj.point1 === target || obj.point2 === target || obj.point3 === target) return true;
+        if (obj.center === target || obj.radiuspoint === target) return true;
+        if (Array.isArray(obj.vertices) && obj.vertices.includes(target)) return true;
+        if (Array.isArray(obj.parents) && obj.parents.includes(target)) return true;
+        if (Array.isArray(obj.meta?.closedSegmentIds) && obj.meta.closedSegmentIds.includes(target.registryId)) return true;
+        return false;
+    }
+    removeIds(board, ids) {
+        const removedIds = [];
+        ids.slice().reverse().forEach((id) => {
+            const obj = this.shapes.get(id);
+            if (obj) {
+                try {
+                    board.removeObject(obj);
+                } catch(e) {
+                    console.error('移除对象失败:', e);
+                }
+                this.shapes.delete(id);
+            }
+            removedIds.push(id);
+        });
+
+        if (removedIds.length > 0) {
+            const removedSet = new Set(removedIds);
+            this.history = this.history.filter((id) => !removedSet.has(id));
+            this.undoStack = this.undoStack
+                .map((group) => group.filter((id) => !removedSet.has(id)))
+                .filter((group) => group.length > 0);
+            if (this.activeUndoBatch) {
+                this.activeUndoBatch = this.activeUndoBatch.filter((id) => !removedSet.has(id));
+            }
+        }
+
         return removedIds.at(-1) || null;
     }
     get(id) { return this.shapes.get(id); }

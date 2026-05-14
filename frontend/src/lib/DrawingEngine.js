@@ -26,7 +26,7 @@ export class DrawingEngine {
         return created;
     }
     processInstruction(ins) {
-        const { action, params, result_id, label } = ins;
+        const { action, params, result_id, label, meta } = ins;
         let obj = null;
         const commonAttr = { name: label || '', withLabel: !!label, size: 3, strokeWidth: 2 };
 
@@ -57,12 +57,33 @@ export class DrawingEngine {
                     this.addHoverCursor(obj);
                     break;
                 case 'circle': {
-                    const center = this.resolveRef(params.center);
-                    const through = this.resolveRef(params.through);
+                    let center;
+                    let through;
+                    let auxiliaryPoints = null;
+
+                    if (typeof params.cx === 'number' && typeof params.cy === 'number' && typeof params.radius === 'number') {
+                        center = this.board.create('point', [params.cx, params.cy], {
+                            ...commonAttr,
+                            name: params.centerLabel || '',
+                            withLabel: Boolean(params.centerLabel)
+                        });
+                        through = this.board.create('point', [params.cx + params.radius, params.cy], { visible: false, name: '' });
+                        auxiliaryPoints = [center, through];
+                    } else {
+                        center = this.resolveRef(params.center);
+                        through = this.resolveRef(params.through);
+                    }
+
                     obj = this.board.create('circle', [center, through], {
                         ...commonAttr, draggable: true, hasInnerPoints: true,
                         fillColor: '#1890ff', fillOpacity: 0.1
                     });
+                    if (auxiliaryPoints) {
+                        this.attachTranslationDrag(obj, auxiliaryPoints);
+                        obj.on('remove', () => {
+                            auxiliaryPoints.forEach((point) => this.safeRemoveObject(point));
+                        });
+                    }
                     this.addHoverCursor(obj);
                     break;
                 }
@@ -199,6 +220,9 @@ export class DrawingEngine {
         }
 
         if (obj && result_id) {
+            if (meta && typeof meta === 'object') {
+                obj.meta = { ...(obj.meta || {}), ...meta };
+            }
             this.registry.register(result_id, obj);
         }
 
@@ -230,8 +254,14 @@ export class DrawingEngine {
     }
     attachTranslationDrag(shape, controlPoints) {
         let dragOrigin = null;
+        let originalPan = null;
 
         shape.on('down', (event) => {
+            if (event?.preventDefault) {
+                event.preventDefault();
+            }
+            originalPan = this.board.options?.pan?.enabled;
+            this.board.setAttribute({ pan: { enabled: false } });
             const mouse = this.board.getUsrCoordsOfMouse(event);
             dragOrigin = {
                 mouse: { x: mouse[0], y: mouse[1] },
@@ -256,6 +286,10 @@ export class DrawingEngine {
 
         shape.on('up', () => {
             dragOrigin = null;
+            if (originalPan !== null) {
+                this.board.setAttribute({ pan: { enabled: originalPan } });
+                originalPan = null;
+            }
         });
     }
 }

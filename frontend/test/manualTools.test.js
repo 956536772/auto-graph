@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { ShapeRegistry } from '../src/lib/ShapeRegistry.js';
 import {
-  buildEllipseDefinition,
+  buildCircleDefinition,
   buildIsoscelesTriangleVertices,
   buildRectangleVertices
 } from '../src/lib/manualTools/geometry.js';
@@ -53,12 +53,83 @@ test('ShapeRegistry can merge provisional steps into one undo step', () => {
   assert.deepEqual(registry.history, []);
 });
 
-test('buildEllipseDefinition constrains circles when Shift is held', () => {
-  const ellipse = buildEllipseDefinition({ x: 0, y: 0 }, { x: 6, y: 2 }, true);
+test('ShapeRegistry removes an object and cleans history plus undo stack', () => {
+  const registry = new ShapeRegistry();
+  const removed = [];
+  const board = {
+    removeObject(object) {
+      removed.push(object.registryId);
+    }
+  };
+  const first = createObject('A');
+  const second = createObject('B');
+  const third = createObject('C');
 
-  assert.equal(ellipse.valid, true);
-  assert.equal(ellipse.rx, 3);
-  assert.equal(ellipse.ry, 3);
+  registry.register('A', first);
+  registry.register('B', second);
+  registry.register('C', third);
+
+  assert.equal(registry.removeObject(board, second), 'B');
+  assert.deepEqual(removed, ['B']);
+  assert.deepEqual(registry.history, ['A', 'C']);
+  assert.equal(registry.exists('B'), false);
+
+  assert.equal(registry.undo(board), 'C');
+  assert.deepEqual(removed, ['B', 'C']);
+  assert.deepEqual(registry.history, ['A']);
+});
+
+test('ShapeRegistry removes dependent geometry when deleting a point', () => {
+  const registry = new ShapeRegistry();
+  const removed = [];
+  const board = {
+    removeObject(object) {
+      removed.push(object.registryId);
+    }
+  };
+  const pointA = createObject('A');
+  const pointB = createObject('B');
+  const segment = { point1: pointA, point2: pointB };
+  const polygon = { vertices: [pointA, pointB] };
+
+  registry.register('A', pointA);
+  registry.register('B', pointB);
+  registry.register('SEG', segment);
+  registry.register('POLY', polygon);
+
+  assert.equal(registry.removeObject(board, pointA), 'A');
+  assert.deepEqual(removed, ['POLY', 'SEG', 'A']);
+  assert.deepEqual(registry.history, ['B']);
+  assert.equal(registry.exists('SEG'), false);
+  assert.equal(registry.exists('POLY'), false);
+});
+
+test('ShapeRegistry removes closed polygon affordance when deleting one of its edges', () => {
+  const registry = new ShapeRegistry();
+  const removed = [];
+  const board = {
+    removeObject(object) {
+      removed.push(object.registryId);
+    }
+  };
+  const segment = createObject('SEG');
+  const polygon = { meta: { closedSegmentIds: ['SEG'] } };
+
+  registry.register('SEG', segment);
+  registry.register('POLY', polygon);
+
+  assert.equal(registry.removeObject(board, segment), 'SEG');
+  assert.deepEqual(removed, ['POLY', 'SEG']);
+  assert.deepEqual(registry.history, []);
+});
+
+test('buildCircleDefinition uses drag distance as radius', () => {
+  const circle = buildCircleDefinition({ x: 0, y: 0 }, { x: 6, y: 2 });
+
+  assert.equal(circle.valid, true);
+  assert.equal(circle.cx, 0);
+  assert.equal(circle.cy, 0);
+  assert.ok(Math.abs(circle.radius - Math.sqrt(40)) < 1e-9);
 });
 
 test('buildRectangleVertices constrains squares when Shift is held', () => {

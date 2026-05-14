@@ -20,7 +20,7 @@ const TOOL_GROUPS = [
     { tool: TOOLS.SELECT, title: '选择', icon: <IconSelect /> },
     { tool: TOOLS.POINT, title: '点', icon: <IconPoint /> },
     { tool: TOOLS.SEGMENT, title: '线段', icon: <IconSegment /> },
-    { tool: TOOLS.CIRCLE, title: '圆/椭圆', icon: <IconCircle /> },
+    { tool: TOOLS.CIRCLE, title: '圆', icon: <IconCircle /> },
     { tool: TOOLS.RECTANGLE, title: '矩形/正方形', icon: <ToolGlyph text="▭" /> },
     { tool: TOOLS.TRIANGLE, title: '等腰/等边三角形', icon: <ToolGlyph text="△" /> }
   ],

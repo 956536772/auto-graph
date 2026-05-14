@@ -97,9 +97,6 @@ export function ensurePointLabelEditor(point, { board, suggestLabel } = {}) {
 
   point.__openLabelEditor = openEditor;
 
-  if (typeof point.on === 'function') {
-    point.on('dblclick', openEditor);
-  }
   attachLabelListener(point, openEditor);
 
   return openEditor;

@@ -33,25 +33,23 @@ body, html {
 
 #toolbar {
   left: 20px;
-  top: 50%;
-  transform: translateY(-50%);
+  top: 76px;
   padding: 10px;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, 40px);
   gap: 12px;
-  max-height: calc(100vh - 40px);
+  max-height: calc(100vh - 96px);
   overflow-y: auto;
 }
 
 .tool-group {
-  display: flex;
-  flex-direction: column;
+  display: contents;
   gap: 12px;
 }
 
 .tool-group + .tool-group {
-  padding-top: 12px;
-  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  padding-top: 0;
+  border-top: none;
 }
 
 .tool-btn {
@@ -165,6 +163,32 @@ body, html {
   color: #666;
 }
 
+.object-action-menu {
+  position: fixed;
+  z-index: 2000;
+  padding: 6px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.14);
+  border: 1px solid rgba(0,0,0,0.08);
+}
+
+.object-action-menu button {
+  min-width: 72px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 8px;
+  background: #fff1f0;
+  color: #cf1322;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.object-action-menu button:hover {
+  background: #ffccc7;
+}
+
 @media (max-width: 768px) {
   #chat-container {
       width: calc(100% - 40px);
@@ -177,15 +201,12 @@ body, html {
       left: 20px;
       right: 20px;
       transform: none;
-      flex-direction: row;
+      grid-template-columns: repeat(auto-fit, minmax(40px, 40px));
       justify-content: center;
-      flex-wrap: wrap;
       max-height: none;
   }
   .tool-group {
-      flex-direction: row;
-      flex-wrap: wrap;
-      justify-content: center;
+      display: contents;
   }
   .tool-group + .tool-group {
       padding-top: 0;
