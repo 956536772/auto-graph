@@ -3,15 +3,17 @@ import { TOOLS, shouldAutoReturnToSelect } from './constants.js';
 import {
   buildCircleDefinition,
   buildIsoscelesTriangleVertices,
+  buildPolygonInstructionsFromVertices,
   buildRectangleVertices,
+  getToolSwitchStatus,
   sameGeometryObject
 } from './geometry.js';
 import { getNextPointLabel, openPointLabelEditor } from './labels.js';
+import { chooseTargetFromElements, isRegisteredSelectableElement, preferPointSnapTarget } from './selection.js';
 
 const POINT_TYPES = new Set(['point', 'glider']);
 const PATH_TYPES = new Set(['segment', 'line', 'circle', 'ellipse']);
 const LINEAR_PATH_TYPES = new Set(['segment', 'line']);
-const SELECTABLE_TYPES = new Set(['point', 'glider', 'segment', 'line', 'circle', 'ellipse', 'polygon', 'angle']);
 const SNAP_RADIUS_PX = 14;
 const PREVIEW_ATTRS = {
   dash: 2,
@@ -92,8 +94,13 @@ export class ManualDrawingController {
     if (tool === this.activeTool) {
       return;
     }
+    const previousTool = this.activeTool;
+    const hadPendingState = this.hasPendingInteraction();
     this.resetState({ discardPendingGroups: true });
     this.activeTool = tool;
+    if (hadPendingState) {
+      this.onStatusChange(getToolSwitchStatus(previousTool, tool, TOOLS.SELECT));
+    }
   }
 
   resetState(options = {}) {
@@ -122,6 +129,17 @@ export class ManualDrawingController {
       event.preventDefault();
       this.completeAndReturn('已取消当前操作', { discardPendingGroups: true });
     }
+  }
+
+  hasPendingInteraction() {
+    return Boolean(
+      this.state.dragStart ||
+      this.state.previewShape ||
+      this.state.segmentStart ||
+      this.state.pendingUndoGroupCount > 0 ||
+      this.state.selectedPoints.length > 0 ||
+      this.state.selectedPath
+    );
   }
 
   handleDown(event) {
@@ -239,7 +257,8 @@ export class ManualDrawingController {
             cx: definition.cx,
             cy: definition.cy,
             radius: definition.radius,
-            centerLabel: 'O'
+            centerLabel: getNextPointLabel(this.registry),
+            centerResultId: this.nextId('circle_center')
           },
           result_id: this.nextId('circle')
         }]);
@@ -283,6 +302,10 @@ export class ManualDrawingController {
   }
 
   handleDoubleClick(event) {
+    if (this.activeTool !== TOOLS.SELECT) {
+      return;
+    }
+
     const target = this.getTargetUnderMouse(event, { includeShapes: true }) || this.getNearestSnapTarget(event, { includePath: true });
     if (!target) {
       this.closeObjectMenu();
@@ -433,28 +456,15 @@ export class ManualDrawingController {
 
   createPolygonFromVertices(vertices, prefix) {
     const usedLabels = this.collectUsedPointLabels();
-    const pointInstructions = vertices.map((vertex) => {
-      const resultId = this.nextId(`${prefix}_point`);
-      const label = this.getNextAvailableLabel(usedLabels);
-      usedLabels.add(label);
-      return {
-        action: 'place_point',
-        params: { x: vertex.x, y: vertex.y },
-        result_id: resultId,
-        label
-      };
-    });
-
-    this.engine.execute([
-      ...pointInstructions,
-      {
-        action: 'polygon',
-        params: {
-          points: pointInstructions.map((instruction) => instruction.result_id)
-        },
-        result_id: this.nextId(prefix)
+    const instructions = buildPolygonInstructionsFromVertices(vertices, prefix, {
+      nextId: (idPrefix) => this.nextId(idPrefix),
+      nextLabel: () => {
+        const label = this.getNextAvailableLabel(usedLabels);
+        usedLabels.add(label);
+        return label;
       }
-    ]);
+    });
+    this.engine.execute(instructions);
   }
 
   createSegmentPreview(point) {
@@ -648,28 +658,7 @@ export class ManualDrawingController {
 
   getTargetUnderMouse(event, options = {}) {
     const elements = this.board.getAllObjectsUnderMouse(event) || [];
-    if (elements.length === 0) {
-      return null;
-    }
-
-    const point = elements.find((element) => POINT_TYPES.has(element.elType) && element.visProp?.visible !== false);
-    if (point) {
-      return { type: 'point', obj: point };
-    }
-
-    const path = elements.find((element) => PATH_TYPES.has(element.elType));
-    if (path) {
-      return { type: 'path', obj: path };
-    }
-
-    if (options.includeShapes) {
-      const shape = elements.find((element) => SELECTABLE_TYPES.has(element.elType) && element.visProp?.visible !== false);
-      if (shape) {
-        return { type: shape.elType === 'point' || shape.elType === 'glider' ? 'point' : 'shape', obj: shape };
-      }
-    }
-
-    return null;
+    return chooseTargetFromElements(elements, this.registry, options);
   }
 
   getNearestSnapTarget(event, options = {}) {
@@ -683,8 +672,8 @@ export class ManualDrawingController {
 
       if (POINT_TYPES.has(obj.elType)) {
         const distance = this.distanceToPointPx(mouse, obj);
-        if (distance <= SNAP_RADIUS_PX && (!nearest || distance < nearest.distance)) {
-          nearest = { type: 'point', obj, distance };
+        if (distance <= SNAP_RADIUS_PX) {
+          nearest = preferPointSnapTarget(nearest, { type: 'point', obj, distance });
         }
         return;
       }
@@ -692,7 +681,7 @@ export class ManualDrawingController {
       if (options.includePath && PATH_TYPES.has(obj.elType) && typeof obj.hasPoint === 'function') {
         const screen = this.toScreenCoords(mouse);
         if (obj.hasPoint(screen.x, screen.y)) {
-          nearest = { type: 'path', obj, distance: SNAP_RADIUS_PX };
+          nearest = preferPointSnapTarget(nearest, { type: 'path', obj, distance: SNAP_RADIUS_PX });
         }
       }
     });
@@ -727,6 +716,11 @@ export class ManualDrawingController {
   }
 
   selectObject(obj) {
+    if (!this.registry.idForObject(obj)) {
+      this.onStatusChange('请选择可编辑的对象');
+      return;
+    }
+
     if (!obj || this.state.selectedObject === obj) {
       return;
     }
@@ -812,11 +806,20 @@ export class ManualDrawingController {
 
   deleteObject(obj) {
     const target = obj || this.state.selectedObject;
-    this.clearSelection();
     const removedId = this.registry.removeObject(this.board, target);
+    if (this.state.selectedObject === target) {
+      this.state.selectedObject = null;
+      this.state.selectedSnapshot = null;
+    } else {
+      this.clearSelection();
+    }
     this.removeObjectMenu();
     this.onStatusChange(removedId ? '对象已删除' : '没有找到可删除对象');
     this.board.update();
+  }
+
+  isSelectableElement(element) {
+    return isRegisteredSelectableElement(element, this.registry);
   }
 
   nextId(prefix) {

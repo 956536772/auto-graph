@@ -82,3 +82,46 @@ export function sameGeometryObject(first, second) {
   }
   return false;
 }
+
+export function buildPolygonInstructionsFromVertices(vertices, prefix, options) {
+  const { nextId, nextLabel } = options;
+  const pointInstructions = vertices.map((vertex) => ({
+    action: 'place_point',
+    params: { x: vertex.x, y: vertex.y },
+    result_id: nextId(`${prefix}_point`),
+    label: nextLabel()
+  }));
+  const segmentInstructions = pointInstructions.map((instruction, index) => {
+    const nextInstruction = pointInstructions[(index + 1) % pointInstructions.length];
+    return {
+      action: 'segment',
+      params: {
+        p1: instruction.result_id,
+        p2: nextInstruction.result_id
+      },
+      result_id: nextId(`${prefix}_segment`)
+    };
+  });
+
+  return [
+    ...pointInstructions,
+    ...segmentInstructions,
+    {
+      action: 'polygon',
+      params: {
+        points: pointInstructions.map((instruction) => instruction.result_id)
+      },
+      result_id: nextId(prefix),
+      meta: {
+        closedSegmentIds: segmentInstructions.map((instruction) => instruction.result_id)
+      }
+    }
+  ];
+}
+
+export function getToolSwitchStatus(previousTool, nextTool, selectTool) {
+  if (nextTool === selectTool) {
+    return `已取消${previousTool}操作，回到选择模式`;
+  }
+  return `已取消${previousTool}操作，切换到${nextTool}`;
+}

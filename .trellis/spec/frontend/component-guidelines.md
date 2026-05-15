@@ -17,6 +17,7 @@ Use factory functions to create recurring elements with consistent properties an
 ### Interactivity
 - Points should generally be draggable.
 - Labels should support double-click to rename (using `p.label.on('dblclick', ...)`).
+- For transient segment previews, prefer a two-point `curve` with updated `dataX`/`dataY` over a `segment` bound to temporary hidden points. JSXGraph can produce null endpoint coordinates for segment previews during pointer event updates.
 
 ## Styling
 - Use Ant Design-like colors for consistency (e.g., `#1890ff` for primary blue, `#f5222d` for errors/alerts).

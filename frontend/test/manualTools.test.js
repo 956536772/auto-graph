@@ -2,11 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { ShapeRegistry } from '../src/lib/ShapeRegistry.js';
+import { TOOLS } from '../src/lib/manualTools/constants.js';
 import {
   buildCircleDefinition,
   buildIsoscelesTriangleVertices,
-  buildRectangleVertices
+  buildPolygonInstructionsFromVertices,
+  buildRectangleVertices,
+  getToolSwitchStatus
 } from '../src/lib/manualTools/geometry.js';
+import { chooseTargetFromElements, preferPointSnapTarget } from '../src/lib/manualTools/selection.js';
 
 function createObject(id) {
   return { id };
@@ -123,6 +127,70 @@ test('ShapeRegistry removes closed polygon affordance when deleting one of its e
   assert.deepEqual(registry.history, []);
 });
 
+test('ShapeRegistry removes a circle when deleting its registered center point', () => {
+  const registry = new ShapeRegistry();
+  const removed = [];
+  const board = {
+    removeObject(object) {
+      removed.push(object.registryId);
+    }
+  };
+  const center = createObject('CENTER');
+  const circle = { center };
+
+  registry.register('CENTER', center);
+  registry.register('CIRCLE', circle);
+
+  assert.equal(registry.removeObject(board, center), 'CENTER');
+  assert.deepEqual(removed, ['CIRCLE', 'CENTER']);
+  assert.deepEqual(registry.history, []);
+});
+
+test('drag-created polygons include the same selectable edge affordances as closed segment chains', () => {
+  let idCounter = 0;
+  const instructions = buildPolygonInstructionsFromVertices([
+    { x: 0, y: 0 },
+    { x: 4, y: 0 },
+    { x: 4, y: 3 },
+    { x: 0, y: 3 }
+  ], 'rectangle', {
+    nextId: (prefix) => {
+      idCounter += 1;
+      return `${prefix}_${idCounter}`;
+    },
+    nextLabel: () => `P${idCounter + 1}`
+  });
+
+  const points = instructions.filter((instruction) => instruction.action === 'place_point');
+  const segments = instructions.filter((instruction) => instruction.action === 'segment');
+  const polygon = instructions.find((instruction) => instruction.action === 'polygon');
+
+  assert.equal(points.length, 4);
+  assert.equal(segments.length, 4);
+  assert.deepEqual(
+    segments.map((instruction) => [instruction.params.p1, instruction.params.p2]),
+    [
+      [points[0].result_id, points[1].result_id],
+      [points[1].result_id, points[2].result_id],
+      [points[2].result_id, points[3].result_id],
+      [points[3].result_id, points[0].result_id]
+    ]
+  );
+  assert.deepEqual(polygon.params.points, points.map((instruction) => instruction.result_id));
+  assert.deepEqual(polygon.meta.closedSegmentIds, segments.map((instruction) => instruction.result_id));
+});
+
+test('tool switch status clarifies cancelled pending interactions', () => {
+  assert.equal(
+    getToolSwitchStatus(TOOLS.SEGMENT, TOOLS.SELECT, TOOLS.SELECT),
+    '已取消线段操作，回到选择模式'
+  );
+  assert.equal(
+    getToolSwitchStatus(TOOLS.SEGMENT, TOOLS.CIRCLE, TOOLS.SELECT),
+    '已取消线段操作，切换到圆'
+  );
+});
+
 test('buildCircleDefinition uses drag distance as radius', () => {
   const circle = buildCircleDefinition({ x: 0, y: 0 }, { x: 6, y: 2 });
 
@@ -146,4 +214,41 @@ test('buildIsoscelesTriangleVertices constrains equilateral triangles when Shift
   assert.equal(triangle.valid, true);
   assert.equal(triangle.vertices[2].x, 2);
   assert.ok(Math.abs(triangle.vertices[2].y - expectedHeight) < 1e-9);
+});
+
+test('chooseTargetFromElements ignores visible unregistered auxiliary points', () => {
+  const registry = new ShapeRegistry();
+  const auxiliaryPoint = {
+    elType: 'point',
+    visProp: { visible: true }
+  };
+  const registeredPoint = {
+    elType: 'point',
+    visProp: { visible: true }
+  };
+  registry.register('P1', registeredPoint);
+
+  assert.equal(chooseTargetFromElements([auxiliaryPoint], registry), null);
+  assert.equal(chooseTargetFromElements([auxiliaryPoint, registeredPoint], registry).obj, registeredPoint);
+});
+
+test('preferPointSnapTarget keeps points ahead of path hits', () => {
+  const point = {
+    elType: 'point',
+    visProp: { visible: true },
+    X: () => 1,
+    Y: () => 1
+  };
+  const path = {
+    elType: 'segment',
+    visProp: { visible: true },
+    hasPoint: () => true
+  };
+  const target = preferPointSnapTarget(
+    { type: 'path', obj: path, distance: 14 },
+    { type: 'point', obj: point, distance: 8 }
+  );
+
+  assert.equal(target.type, 'point');
+  assert.equal(target.obj, point);
 });

@@ -59,16 +59,28 @@ export class DrawingEngine {
                 case 'circle': {
                     let center;
                     let through;
-                    let auxiliaryPoints = null;
+                    let hiddenControlPoints = null;
 
                     if (typeof params.cx === 'number' && typeof params.cy === 'number' && typeof params.radius === 'number') {
                         center = this.board.create('point', [params.cx, params.cy], {
                             ...commonAttr,
                             name: params.centerLabel || '',
-                            withLabel: Boolean(params.centerLabel)
+                            withLabel: Boolean(params.centerLabel),
+                            fixed: true,
+                            highlight: false,
+                            showInfobox: false
                         });
-                        through = this.board.create('point', [params.cx + params.radius, params.cy], { visible: false, name: '' });
-                        auxiliaryPoints = [center, through];
+                        through = this.board.create('point', [params.cx + params.radius, params.cy], {
+                            visible: false,
+                            name: '',
+                            fixed: true,
+                            highlight: false,
+                            showInfobox: false
+                        });
+                        if (params.centerResultId) {
+                            this.registry.register(params.centerResultId, center);
+                        }
+                        hiddenControlPoints = [through];
                     } else {
                         center = this.resolveRef(params.center);
                         through = this.resolveRef(params.through);
@@ -78,10 +90,10 @@ export class DrawingEngine {
                         ...commonAttr, draggable: true, hasInnerPoints: true,
                         fillColor: '#1890ff', fillOpacity: 0.1
                     });
-                    if (auxiliaryPoints) {
-                        this.attachTranslationDrag(obj, auxiliaryPoints);
+                    if (hiddenControlPoints) {
+                        this.attachTranslationDrag(obj, [center, ...hiddenControlPoints]);
                         obj.on('remove', () => {
-                            auxiliaryPoints.forEach((point) => this.safeRemoveObject(point));
+                            hiddenControlPoints.forEach((point) => this.safeRemoveObject(point));
                         });
                     }
                     this.addHoverCursor(obj);
