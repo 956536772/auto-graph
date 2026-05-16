@@ -1,0 +1,5 @@
+{"instruction": "Add TOOLS.PREVIEW to constant.js", "files": ["frontend/src/lib/manualTools/constants.js"]}
+{"instruction": "Implement selection rectangle logic for TOOLS.PREVIEW in ManualDrawingController.js", "files": ["frontend/src/lib/manualTools/ManualDrawingController.js"]}
+{"instruction": "Create SVGProcessor utility for black-and-white exam style conversion", "files": ["frontend/src/lib/SVGProcessor.js"]}
+{"instruction": "Add Preview button to top of screen and implement PreviewModal in App.jsx", "files": ["frontend/src/App.jsx"]}
+{"instruction": "Add styles for top actions and preview modal in App.css", "files": ["frontend/src/App.css"]}

@@ -1,0 +1,6 @@
+{"instruction": "Verify that clicking 'Preview' enters selection mode", "files": ["frontend/src/App.jsx", "frontend/src/lib/manualTools/ManualDrawingController.js"]}
+{"instruction": "Verify that dragging creates a selection rectangle", "files": ["frontend/src/lib/manualTools/ManualDrawingController.js"]}
+{"instruction": "Verify that releasing the mouse opens the preview modal with the cropped image", "files": ["frontend/src/App.jsx", "frontend/src/lib/manualTools/ManualDrawingController.js"]}
+{"instruction": "Verify that the preview image is black and white and grid/axes are hidden", "files": ["frontend/src/lib/SVGProcessor.js"]}
+{"instruction": "Verify that 'Export PNG' and 'Export SVG' buttons work", "files": ["frontend/src/App.jsx"]}
+{"instruction": "Verify that 'Copy' button copies image to clipboard", "files": ["frontend/src/App.jsx"]}
