@@ -5,14 +5,13 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
 record ChatRequest(String text, List<CanvasObjectPayload> context) {
 }
 
 record ChatResponse(String status, List<DrawingInstruction> instructions, String responseText, Clarification clarification) {
     static ChatResponse ok(List<DrawingInstruction> instructions, String responseText) {
-        return new ChatResponse("ok", instructions, responseText, null);
+        return new ChatResponse("instructions", instructions, responseText, null);
     }
 
     static ChatResponse clarification(Clarification clarification) {
@@ -110,93 +109,49 @@ record CanvasObject(
 record Anchor(double x, double y) {
 }
 
-record GeometryIntent(IntentType type, Map<String, Object> args, String successMessage) {
-    GeometryIntent withResolvedArgs(Map<String, String> resolvedArgs) {
-        var merged = new java.util.HashMap<String, Object>(args);
-        merged.putAll(resolvedArgs);
-        return new GeometryIntent(type, merged, successMessage);
+record GeometryAiResponse(String mode, String responseText, List<DrawingInstruction> instructions, Clarification clarification) {
+    static GeometryAiResponse instructions(List<DrawingInstruction> instructions, String responseText) {
+        return new GeometryAiResponse("instructions", responseText, instructions, null);
     }
 
-    String stringArg(String key) {
-        return Objects.toString(args.get(key), null);
-    }
-}
-
-enum IntentType {
-    CREATE_TRIANGLE,
-    CREATE_SQUARE,
-    CREATE_SEGMENT,
-    CREATE_MIDPOINT,
-    CREATE_PARALLEL,
-    CREATE_PERPENDICULAR,
-    CREATE_CIRCLE,
-    CREATE_CIRCUMCIRCLE,
-    CREATE_INCIRCLE,
-    CREATE_TANGENT,
-    CREATE_CIRCLE_INTERSECTIONS
-}
-
-record IntentExtraction(GeometryIntent intent, Clarification clarification) {
-}
-
-record ResolutionOutcome(GeometryIntent intent, String errorMessage, Clarification clarification) {
-}
-
-record RefQuery(
-    String raw,
-    java.util.Set<String> allowedTypes,
-    String explicitLabel,
-    LabelPair endpointLabels,
-    String centerLabel,
-    Descriptor descriptor
-) {
-    static RefQuery label(String label, java.util.Set<String> allowedTypes) {
-        return new RefQuery(label, allowedTypes, label, null, null, new Descriptor(PositionHint.NONE, SizeHint.NONE, false));
+    static GeometryAiResponse clarification(Clarification clarification) {
+        return new GeometryAiResponse("clarification", clarification.question(), List.of(), clarification);
     }
 
-    static RefQuery lineByEndpoints(String first, String second, java.util.Set<String> allowedTypes) {
-        return new RefQuery(first + second, allowedTypes, null, new LabelPair(first, second), null, new Descriptor(PositionHint.NONE, SizeHint.NONE, false));
-    }
-
-    static RefQuery circleByCenter(String centerLabel, java.util.Set<String> allowedTypes) {
-        return new RefQuery(centerLabel, allowedTypes, null, null, centerLabel, new Descriptor(PositionHint.NONE, SizeHint.NONE, false));
+    static GeometryAiResponse error(String responseText) {
+        return new GeometryAiResponse("error", responseText, List.of(), null);
     }
 }
 
-record LabelPair(String first, String second) {
-}
-
-record Descriptor(PositionHint positionHint, SizeHint sizeHint, boolean recent) {
-}
-
-enum PositionHint {
-    NONE,
-    LEFTMOST,
-    RIGHTMOST,
-    TOPMOST,
-    BOTTOMMOST
-}
-
-enum SizeHint {
-    NONE,
-    LARGEST,
-    SMALLEST
-}
-
-record ResolvedReference(CanvasObject object, String errorMessage, Clarification clarification) {
-    static ResolvedReference ok(CanvasObject object) {
-        return new ResolvedReference(object, null, null);
+record LlmDirectResult(LlmDirectStatus status, GeometryAiResponse response, LlmFailureReason reason) {
+    static LlmDirectResult success(GeometryAiResponse response) {
+        return new LlmDirectResult(LlmDirectStatus.SUCCESS, response, null);
     }
 
-    static ResolvedReference error(String errorMessage) {
-        return new ResolvedReference(null, errorMessage, null);
+    static LlmDirectResult unavailable(LlmFailureReason reason) {
+        return new LlmDirectResult(LlmDirectStatus.UNAVAILABLE, null, reason);
     }
 
-    static ResolvedReference clarify(Clarification clarification) {
-        return new ResolvedReference(null, null, clarification);
+    static LlmDirectResult invalid(LlmFailureReason reason) {
+        return new LlmDirectResult(LlmDirectStatus.INVALID, null, reason);
     }
+}
 
-    ResolutionOutcome toOutcome() {
-        return new ResolutionOutcome(null, errorMessage, clarification);
-    }
+enum LlmDirectStatus {
+    SUCCESS,
+    UNAVAILABLE,
+    INVALID
+}
+
+enum LlmFailureReason {
+    DISABLED,
+    MISSING_API_KEY,
+    HTTP_ERROR,
+    NETWORK_ERROR,
+    TIMEOUT,
+    MISSING_WORKFLOW,
+    EMPTY_RESPONSE,
+    MALFORMED_RESPONSE,
+    INVALID_INTENT,
+    UNSUPPORTED_REQUEST
 }

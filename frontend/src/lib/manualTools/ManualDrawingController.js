@@ -12,8 +12,9 @@ import { getNextPointLabel, openPointLabelEditor } from './labels.js';
 import { chooseTargetFromElements, isRegisteredSelectableElement, preferPointSnapTarget } from './selection.js';
 
 const POINT_TYPES = new Set(['point', 'glider']);
-const PATH_TYPES = new Set(['segment', 'line', 'circle', 'ellipse']);
-const LINEAR_PATH_TYPES = new Set(['segment', 'line']);
+const LINE_TYPES = ['segment', 'line', 'parallel', 'perpendicular', 'bisector', 'tangent'];
+const PATH_TYPES = new Set([...LINE_TYPES, 'circle', 'ellipse']);
+const LINEAR_PATH_TYPES = new Set(LINE_TYPES);
 const SNAP_RADIUS_PX = 14;
 const PREVIEW_ATTRS = {
   dash: 2,
@@ -67,14 +68,14 @@ export class ManualDrawingController {
     this.handleDown = this.handleDown.bind(this);
     this.handleMove = this.handleMove.bind(this);
     this.handleUp = this.handleUp.bind(this);
-    this.handleDoubleClick = this.handleDoubleClick.bind(this);
+    this.handleContextMenu = this.handleContextMenu.bind(this);
     this.handleKeyDown = this.handleKeyDown.bind(this);
     this.closeObjectMenu = this.closeObjectMenu.bind(this);
 
     this.board.on('down', this.handleDown);
     this.board.on('move', this.handleMove);
     this.board.on('up', this.handleUp);
-    this.board.on('dblclick', this.handleDoubleClick);
+    this.board.containerObj?.addEventListener('contextmenu', this.handleContextMenu);
     window.addEventListener('keydown', this.handleKeyDown);
     window.addEventListener('pointerdown', this.closeObjectMenu);
   }
@@ -85,7 +86,7 @@ export class ManualDrawingController {
     this.board.off('down', this.handleDown);
     this.board.off('move', this.handleMove);
     this.board.off('up', this.handleUp);
-    this.board.off('dblclick', this.handleDoubleClick);
+    this.board.containerObj?.removeEventListener('contextmenu', this.handleContextMenu);
     window.removeEventListener('keydown', this.handleKeyDown);
     window.removeEventListener('pointerdown', this.closeObjectMenu);
   }
@@ -143,6 +144,10 @@ export class ManualDrawingController {
   }
 
   handleDown(event) {
+    if (this.isNonPrimaryMouseButton(event)) {
+      return;
+    }
+
     switch (this.activeTool) {
       case TOOLS.SELECT:
         this.handleSelectTool(event);
@@ -298,10 +303,10 @@ export class ManualDrawingController {
     }
 
     this.selectObject(target.obj);
-    this.onStatusChange('已选中对象，双击可打开操作菜单');
+    this.onStatusChange('已选中对象，右键可打开操作菜单');
   }
 
-  handleDoubleClick(event) {
+  handleContextMenu(event) {
     if (this.activeTool !== TOOLS.SELECT) {
       return;
     }
@@ -321,6 +326,10 @@ export class ManualDrawingController {
 
     this.selectObject(target.obj);
     this.showObjectMenu(event, target.obj);
+  }
+
+  isNonPrimaryMouseButton(event) {
+    return typeof event?.button === 'number' && event.button !== 0;
   }
 
   handlePointTool(event) {

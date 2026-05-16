@@ -71,7 +71,45 @@ export class ShapeRegistry {
     removeObject(board, jxgObject) {
         const id = this.idForObject(jxgObject);
         if (!id) return null;
-        return this.removeIds(board, this.collectDependentIds([id]));
+        return this.removeIds(board, this.collectDependentIds(this.collectOwnedIds([id])));
+    }
+    collectOwnedIds(rootIds) {
+        const ids = new Set(rootIds);
+        let changed = true;
+
+        while (changed) {
+            changed = false;
+            for (const id of Array.from(ids)) {
+                const obj = this.shapes.get(id);
+                if (!obj) continue;
+                const ownedIds = this.getDirectOwnedIds(obj);
+                ownedIds.forEach((ownedId) => {
+                    if (!ids.has(ownedId)) {
+                        ids.add(ownedId);
+                        changed = true;
+                    }
+                });
+            }
+        }
+
+        return Array.from(ids);
+    }
+    getDirectOwnedIds(obj) {
+        const ids = [];
+        if (!obj) return ids;
+
+        if (obj.elType === 'polygon') {
+            if (Array.isArray(obj.meta?.closedSegmentIds)) {
+                ids.push(...obj.meta.closedSegmentIds);
+            }
+            if (Array.isArray(obj.vertices)) {
+                obj.vertices.forEach((point) => {
+                    if (point?.registryId) ids.push(point.registryId);
+                });
+            }
+        }
+
+        return ids.filter((id) => this.shapes.has(id));
     }
     collectDependentIds(rootIds) {
         const ids = new Set(rootIds);
@@ -84,6 +122,7 @@ export class ShapeRegistry {
                 const dependsOnRemoved = Array.from(ids).some((id) => this.dependsOn(obj, this.shapes.get(id)));
                 if (dependsOnRemoved) {
                     ids.add(candidateId);
+                    this.collectOwnedIds([candidateId]).forEach((ownedId) => ids.add(ownedId));
                     changed = true;
                 }
             }

@@ -1,170 +1,148 @@
 package com.autograph.backend.chat;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.exception.HttpException;
+import dev.langchain4j.exception.LangChain4jException;
+import dev.langchain4j.exception.TimeoutException;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.openai.OpenAiChatModel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Component;
+import org.springframework.util.FileCopyUtils;
 
 import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 @Component
 public class GeometryLlmClient {
+    private static final Logger LOGGER = LoggerFactory.getLogger(GeometryLlmClient.class);
 
-    private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {
-    };
+    private static final String WORKFLOW_RESOURCE = "classpath:ai/geometry-workflow.md";
 
-    private static final String SYSTEM_PROMPT = """
-        You convert Chinese geometry drawing requests into strict JSON intents for a geometry app.
-        Return JSON only, no markdown.
-
-        Supported intentType values:
-        CREATE_TRIANGLE
-        CREATE_SQUARE
-        CREATE_SEGMENT
-        CREATE_MIDPOINT
-        CREATE_PARALLEL
-        CREATE_PERPENDICULAR
-        CREATE_CIRCLE
-        CREATE_CIRCUMCIRCLE
-        CREATE_INCIRCLE
-        CREATE_TANGENT
-        CREATE_CIRCLE_INTERSECTIONS
-
-        Reference object schema:
-        {
-          "raw": "original short phrase",
-          "allowedTypes": ["point","glider"] or ["segment","line","parallel","perpendicular","tangent"] or ["circle","circumcircle","incircle"],
-          "explicitLabel": "A or null",
-          "endpointLabels": {"first":"A","second":"B"} or null,
-          "centerLabel": "A or null",
-          "descriptor": {
-            "positionHint": "NONE|LEFTMOST|RIGHTMOST|TOPMOST|BOTTOMMOST",
-            "sizeHint": "NONE|LARGEST|SMALLEST",
-            "recent": true|false
-          }
-        }
-
-        Response schema:
-        {
-          "intentType": "...",
-          "successMessage": "...",
-          "args": { ... }
-        }
-
-        For CREATE_TRIANGLE and CREATE_SQUARE, args should be:
-        {"labels":["A","B","C"]} or {"labels":["A","B","C","D"]}
-
-        For CREATE_SEGMENT:
-        {"from": <Reference>, "to": <Reference>}
-
-        For CREATE_MIDPOINT:
-        {"a": <Reference>, "b": <Reference>}
-
-        For CREATE_PARALLEL and CREATE_PERPENDICULAR:
-        {"point": <Reference>, "line": <Reference>}
-
-        For CREATE_CIRCLE:
-        {"center": <Reference>, "through": <Reference>}
-
-        For CREATE_CIRCUMCIRCLE and CREATE_INCIRCLE:
-        {"p1": <Reference>, "p2": <Reference>, "p3": <Reference>}
-
-        For CREATE_TANGENT:
-        {"point": <Reference>, "circle": <Reference>}
-
-        For CREATE_CIRCLE_INTERSECTIONS:
-        {"first": <Reference>, "second": <Reference>}
-
-        Prefer explicit labels when the user names them.
-        If the user says things like "左边那个点", "大圆", "刚才那条线", encode that into descriptor instead of inventing labels.
-        If the request is unsupported or unclear, return {"intentType":"UNSUPPORTED","successMessage":"", "args":{}}.
-        """;
-
-    private final HttpClient httpClient;
+    private final ChatModel chatModel;
     private final ObjectMapper objectMapper;
-    private final String baseUrl;
-    private final String model;
     private final String apiKey;
     private final boolean enabled;
+    private final String workflow;
 
     @Autowired
     public GeometryLlmClient(
         @Value("${geometry.llm.base-url:https://api.ikuncode.cc/v1}") String baseUrl,
-        @Value("${geometry.llm.model:gpt5.4}") String model,
+        @Value("${geometry.llm.model:gpt-5.4}") String model,
         @Value("${geometry.llm.api-key:}") String apiKey,
-        @Value("${geometry.llm.enabled:true}") boolean enabled
+        @Value("${geometry.llm.enabled:true}") boolean enabled,
+        ResourceLoader resourceLoader
     ) {
-        this(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(), new ObjectMapper(), baseUrl, model, apiKey, enabled);
+        this(
+            OpenAiChatModel.builder()
+                .baseUrl(trimTrailingSlash(baseUrl))
+                .apiKey(apiKey == null || apiKey.isBlank() ? "missing-api-key" : apiKey)
+                .modelName(model)
+                .temperature(0d)
+                .timeout(Duration.ofSeconds(120))
+                .maxRetries(0)
+                .build(),
+            new ObjectMapper(),
+            apiKey,
+            enabled,
+            loadWorkflow(resourceLoader)
+        );
     }
 
-    GeometryLlmClient(HttpClient httpClient, ObjectMapper objectMapper, String baseUrl, String model, String apiKey, boolean enabled) {
-        this.httpClient = httpClient;
+    GeometryLlmClient(ChatModel chatModel, ObjectMapper objectMapper, String apiKey, boolean enabled) {
+        this(chatModel, objectMapper, apiKey, enabled, "");
+    }
+
+    GeometryLlmClient(ChatModel chatModel, ObjectMapper objectMapper, String apiKey, boolean enabled, String workflow) {
+        this.chatModel = chatModel;
         this.objectMapper = objectMapper;
-        this.baseUrl = baseUrl;
-        this.model = model;
         this.apiKey = apiKey;
         this.enabled = enabled;
+        this.workflow = workflow;
     }
 
     static GeometryLlmClient disabled() {
-        return new GeometryLlmClient(HttpClient.newHttpClient(), new ObjectMapper(), "", "", "", false);
+        return new GeometryLlmClient(null, new ObjectMapper(), "", false);
     }
 
-    Optional<GeometryIntent> extractIntent(String text, ContextIndex context) {
-        if (!enabled || apiKey == null || apiKey.isBlank()) {
-            return Optional.empty();
+    LlmDirectResult extractInstructions(String text, ContextIndex context) {
+        if (!enabled) {
+            LOGGER.warn("Geometry LLM unavailable: {}", LlmFailureReason.DISABLED);
+            return LlmDirectResult.unavailable(LlmFailureReason.DISABLED);
+        }
+        if (apiKey == null || apiKey.isBlank()) {
+            LOGGER.warn("Geometry LLM unavailable: {}", LlmFailureReason.MISSING_API_KEY);
+            return LlmDirectResult.unavailable(LlmFailureReason.MISSING_API_KEY);
+        }
+        if (workflow == null || workflow.isBlank()) {
+            LOGGER.warn("Geometry LLM unavailable: workflow resource is empty");
+            return LlmDirectResult.unavailable(LlmFailureReason.MISSING_WORKFLOW);
         }
 
         try {
-            var body = Map.of(
-                "model", model,
-                "temperature", 0.1,
-                "messages", List.of(
-                    Map.of("role", "system", "content", SYSTEM_PROMPT),
-                    Map.of("role", "user", "content", buildUserPrompt(text, context))
-                )
+            var response = chatModel.chat(
+                SystemMessage.from(workflow),
+                UserMessage.from(buildUserPrompt(text, context))
             );
-
-            var request = HttpRequest.newBuilder()
-                .uri(URI.create(trimTrailingSlash(baseUrl) + "/chat/completions"))
-                .header("Authorization", "Bearer " + apiKey)
-                .header("Content-Type", "application/json")
-                .timeout(Duration.ofSeconds(30))
-                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
-                .build();
-
-            var response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                return Optional.empty();
+            var content = response.aiMessage().text();
+            if (content == null || content.isBlank()) {
+                LOGGER.warn("Geometry LLM returned empty content");
+                return LlmDirectResult.invalid(LlmFailureReason.EMPTY_RESPONSE);
             }
+            return parseDirectContent(content);
+        } catch (TimeoutException exception) {
+            LOGGER.warn("Geometry LLM timed out: {}", exception.getMessage());
+            return LlmDirectResult.unavailable(LlmFailureReason.TIMEOUT);
+        } catch (HttpException exception) {
+            LOGGER.warn("Geometry LLM HTTP error: {}", exception.getMessage());
+            return LlmDirectResult.unavailable(LlmFailureReason.HTTP_ERROR);
+        } catch (LangChain4jException exception) {
+            LOGGER.warn("Geometry LLM provider failure: {}", exception.getMessage());
+            return LlmDirectResult.unavailable(LlmFailureReason.NETWORK_ERROR);
+        } catch (IllegalArgumentException exception) {
+            LOGGER.warn("Geometry LLM returned invalid direct response: {}", exception.getMessage());
+            return LlmDirectResult.invalid(LlmFailureReason.INVALID_INTENT);
+        } catch (Exception exception) {
+            LOGGER.warn("Geometry LLM returned malformed response: {}", exception.getMessage());
+            return LlmDirectResult.invalid(LlmFailureReason.MALFORMED_RESPONSE);
+        }
+    }
 
-            var root = objectMapper.readTree(response.body());
-            var content = root.path("choices").path(0).path("message").path("content").asText("");
-            if (content.isBlank()) {
-                return Optional.empty();
+    private LlmDirectResult parseDirectContent(String content) {
+        try {
+            var responseJson = parseJsonContent(content);
+            var mode = responseJson.path("mode").asText("");
+            if (!List.of("instructions", "clarification", "error").contains(mode)) {
+                return LlmDirectResult.invalid(LlmFailureReason.INVALID_INTENT);
             }
-
-            var intentJson = parseJsonContent(content);
-            var intentType = intentJson.path("intentType").asText("");
-            if (intentType.isBlank() || "UNSUPPORTED".equalsIgnoreCase(intentType)) {
-                return Optional.empty();
+            var responseText = responseJson.path("responseText").asText(defaultResponseText(mode));
+            if ("instructions".equals(mode)) {
+                var instructions = parseInstructions(responseJson.path("instructions"));
+                return LlmDirectResult.success(GeometryAiResponse.instructions(instructions, responseText));
             }
-
-            var successMessage = intentJson.path("successMessage").asText("已处理该几何请求。");
-            var args = parseArgs(IntentType.valueOf(intentType), intentJson.path("args"));
-            return Optional.of(new GeometryIntent(IntentType.valueOf(intentType), args, successMessage));
-        } catch (Exception ignored) {
-            return Optional.empty();
+            if ("clarification".equals(mode)) {
+                var clarification = parseClarification(responseJson, responseText);
+                return LlmDirectResult.success(GeometryAiResponse.clarification(clarification));
+            }
+            return LlmDirectResult.success(GeometryAiResponse.error(responseText));
+        } catch (IllegalArgumentException exception) {
+            LOGGER.warn("Geometry LLM returned invalid direct response: {}", exception.getMessage());
+            return LlmDirectResult.invalid(LlmFailureReason.INVALID_INTENT);
+        } catch (Exception exception) {
+            LOGGER.warn("Geometry LLM returned malformed response: {}", exception.getMessage());
+            return LlmDirectResult.invalid(LlmFailureReason.MALFORMED_RESPONSE);
         }
     }
 
@@ -187,67 +165,52 @@ public class GeometryLlmClient {
         return objectMapper.readTree(trimmed);
     }
 
-    private Map<String, Object> parseArgs(IntentType intentType, JsonNode argsNode) {
-        return switch (intentType) {
-            case CREATE_TRIANGLE, CREATE_SQUARE -> Map.of(
-                "labels", objectMapper.convertValue(argsNode.path("labels"), STRING_LIST)
-            );
-            case CREATE_SEGMENT -> Map.of(
-                "from", parseReference(argsNode.path("from")),
-                "to", parseReference(argsNode.path("to"))
-            );
-            case CREATE_MIDPOINT -> Map.of(
-                "a", parseReference(argsNode.path("a")),
-                "b", parseReference(argsNode.path("b"))
-            );
-            case CREATE_PARALLEL, CREATE_PERPENDICULAR -> Map.of(
-                "point", parseReference(argsNode.path("point")),
-                "line", parseReference(argsNode.path("line"))
-            );
-            case CREATE_CIRCLE -> Map.of(
-                "center", parseReference(argsNode.path("center")),
-                "through", parseReference(argsNode.path("through"))
-            );
-            case CREATE_CIRCUMCIRCLE, CREATE_INCIRCLE -> Map.of(
-                "p1", parseReference(argsNode.path("p1")),
-                "p2", parseReference(argsNode.path("p2")),
-                "p3", parseReference(argsNode.path("p3"))
-            );
-            case CREATE_TANGENT -> Map.of(
-                "point", parseReference(argsNode.path("point")),
-                "circle", parseReference(argsNode.path("circle"))
-            );
-            case CREATE_CIRCLE_INTERSECTIONS -> Map.of(
-                "first", parseReference(argsNode.path("first")),
-                "second", parseReference(argsNode.path("second"))
-            );
+    private List<DrawingInstruction> parseInstructions(JsonNode instructionsNode) {
+        if (!instructionsNode.isArray()) {
+            throw new IllegalArgumentException("instructions must be an array");
+        }
+        var instructions = new ArrayList<DrawingInstruction>();
+        for (var node : instructionsNode) {
+            var action = node.path("action").asText("");
+            var params = objectMapper.convertValue(node.path("params"), Map.class);
+            var resultId = node.path("result_id").asText(null);
+            var label = node.hasNonNull("label") ? node.path("label").asText() : null;
+            instructions.add(new DrawingInstruction(action, params == null ? Map.of() : params, resultId, label));
+        }
+        return instructions;
+    }
+
+    private Clarification parseClarification(JsonNode responseJson, String fallbackQuestion) {
+        var clarificationNode = responseJson.path("clarification");
+        var question = clarificationNode.path("question").asText(fallbackQuestion);
+        var candidates = new ArrayList<ClarificationCandidate>();
+        var candidateNode = clarificationNode.path("candidates");
+        if (candidateNode.isMissingNode()) {
+            candidateNode = responseJson.path("candidates");
+        }
+        if (candidateNode.isArray()) {
+            for (var node : candidateNode) {
+                candidates.add(new ClarificationCandidate(
+                    node.path("id").asText(""),
+                    nullIfBlank(node.path("label").asText(null)),
+                    node.path("type").asText(""),
+                    node.path("description").asText("")
+                ));
+            }
+        }
+        return new Clarification(question, candidates);
+    }
+
+    private String defaultResponseText(String mode) {
+        return switch (mode) {
+            case "instructions" -> "已生成绘图指令。";
+            case "clarification" -> "我需要你进一步说明。";
+            case "error" -> "这个绘图请求暂时无法处理。";
+            default -> "";
         };
     }
 
-    private RefQuery parseReference(JsonNode node) {
-        var descriptorNode = node.path("descriptor");
-        var descriptor = new Descriptor(
-            PositionHint.valueOf(descriptorNode.path("positionHint").asText("NONE")),
-            SizeHint.valueOf(descriptorNode.path("sizeHint").asText("NONE")),
-            descriptorNode.path("recent").asBoolean(false)
-        );
-        var endpointNode = node.path("endpointLabels");
-        var endpoints = endpointNode.isObject() && endpointNode.hasNonNull("first") && endpointNode.hasNonNull("second")
-            ? new LabelPair(endpointNode.path("first").asText(), endpointNode.path("second").asText())
-            : null;
-        var allowedTypes = objectMapper.convertValue(node.path("allowedTypes"), STRING_LIST).stream().collect(java.util.stream.Collectors.toSet());
-
-        return new RefQuery(
-            node.path("raw").asText(""),
-            allowedTypes,
-            nullIfBlank(node.path("explicitLabel").asText(null)),
-            endpoints,
-            nullIfBlank(node.path("centerLabel").asText(null)),
-            descriptor
-        );
-    }
-
-    private String trimTrailingSlash(String value) {
+    private static String trimTrailingSlash(String value) {
         if (value.endsWith("/")) {
             return value.substring(0, value.length() - 1);
         }
@@ -256,5 +219,15 @@ public class GeometryLlmClient {
 
     private String nullIfBlank(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    private static String loadWorkflow(ResourceLoader resourceLoader) {
+        var resource = resourceLoader.getResource(WORKFLOW_RESOURCE);
+        try (var reader = new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8)) {
+            return FileCopyUtils.copyToString(reader);
+        } catch (IOException exception) {
+            LOGGER.warn("Geometry LLM workflow could not be loaded: {}", exception.getMessage());
+            return "";
+        }
     }
 }

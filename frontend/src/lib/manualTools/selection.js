@@ -1,6 +1,7 @@
 const POINT_TYPES = new Set(['point', 'glider']);
-const PATH_TYPES = new Set(['segment', 'line', 'circle', 'ellipse']);
-const SELECTABLE_TYPES = new Set(['point', 'glider', 'segment', 'line', 'circle', 'ellipse', 'polygon', 'angle']);
+const LINE_TYPES = ['segment', 'line', 'parallel', 'perpendicular', 'bisector', 'tangent'];
+const PATH_TYPES = new Set([...LINE_TYPES, 'circle', 'ellipse']);
+const SELECTABLE_TYPES = new Set(['point', 'glider', ...LINE_TYPES, 'circle', 'ellipse', 'polygon', 'angle']);
 
 export function isRegisteredSelectableElement(element, registry) {
   return Boolean(

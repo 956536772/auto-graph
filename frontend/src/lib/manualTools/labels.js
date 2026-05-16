@@ -22,6 +22,17 @@ function attachLabelListener(point, handler) {
   }
 }
 
+function makePointLabelMovable(point) {
+  if (!point || !point.label) {
+    return;
+  }
+
+  point.label.setAttribute({
+    fixed: false,
+    highlight: true
+  });
+}
+
 export function setPointLabel(point, label) {
   if (!point) {
     return '';
@@ -32,6 +43,8 @@ export function setPointLabel(point, label) {
     name: normalized,
     withLabel: Boolean(normalized)
   });
+
+  makePointLabelMovable(point);
 
   if (point.__openLabelEditor) {
     attachLabelListener(point, point.__openLabelEditor);
@@ -73,6 +86,8 @@ export function ensurePointLabelEditor(point, { board, suggestLabel } = {}) {
     return null;
   }
 
+  makePointLabelMovable(point);
+
   if (point.__openLabelEditor) {
     attachLabelListener(point, point.__openLabelEditor);
     return point.__openLabelEditor;
@@ -98,6 +113,7 @@ export function ensurePointLabelEditor(point, { board, suggestLabel } = {}) {
   point.__openLabelEditor = openEditor;
 
   attachLabelListener(point, openEditor);
+  makePointLabelMovable(point);
 
   return openEditor;
 }

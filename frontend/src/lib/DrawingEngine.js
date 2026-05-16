@@ -28,7 +28,13 @@ export class DrawingEngine {
     processInstruction(ins) {
         const { action, params, result_id, label, meta } = ins;
         let obj = null;
-        const commonAttr = { name: label || '', withLabel: !!label, size: 3, strokeWidth: 2 };
+        const commonAttr = {
+            name: label || '',
+            withLabel: !!label,
+            size: 3,
+            strokeWidth: 2,
+            label: { fixed: false }
+        };
 
         try {
             switch (action) {
@@ -66,6 +72,7 @@ export class DrawingEngine {
                             ...commonAttr,
                             name: params.centerLabel || '',
                             withLabel: Boolean(params.centerLabel),
+                            label: { fixed: false },
                             fixed: true,
                             highlight: false,
                             showInfobox: false

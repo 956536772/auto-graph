@@ -7,6 +7,8 @@ import { TOOLS } from './lib/manualTools/constants.js';
 import { ensurePointLabelEditor, getNextPointLabel } from './lib/manualTools/labels.js';
 import './App.css';
 
+const INITIAL_BOUNDING_BOX = [-10, 10, 10, -10];
+
 const IconSelect = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"></path><path d="M13 13l6 6"></path></svg>;
 const IconPoint = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle></svg>;
 const IconSegment = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><circle cx="5" cy="12" r="1"></circle><circle cx="19" cy="12" r="1"></circle></svg>;
@@ -16,26 +18,56 @@ const IconClear = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="no
 const ToolGlyph = ({ text }) => <span className="tool-glyph">{text}</span>;
 
 const TOOL_GROUPS = [
-  [
+  {
+    name: '基础',
+    tools: [
     { tool: TOOLS.SELECT, title: '选择', icon: <IconSelect /> },
     { tool: TOOLS.POINT, title: '点', icon: <IconPoint /> },
     { tool: TOOLS.SEGMENT, title: '线段', icon: <IconSegment /> },
     { tool: TOOLS.CIRCLE, title: '圆', icon: <IconCircle /> },
     { tool: TOOLS.RECTANGLE, title: '矩形/正方形', icon: <ToolGlyph text="▭" /> },
     { tool: TOOLS.TRIANGLE, title: '等腰/等边三角形', icon: <ToolGlyph text="△" /> }
-  ],
-  [
+    ]
+  },
+  {
+    name: '构造',
+    tools: [
     { tool: TOOLS.LABEL, title: '点标签', icon: <ToolGlyph text="A" /> },
     { tool: TOOLS.ANGLE, title: '角标记', icon: <ToolGlyph text="∠" /> },
     { tool: TOOLS.MIDPOINT, title: '中点', icon: <ToolGlyph text="M" /> },
     { tool: TOOLS.PARALLEL, title: '平行', icon: <ToolGlyph text="∥" /> },
     { tool: TOOLS.PERPENDICULAR, title: '垂直', icon: <ToolGlyph text="⊥" /> },
     { tool: TOOLS.ANGLE_BISECTOR, title: '角平分线', icon: <ToolGlyph text="∠/" /> }
-  ],
-  [
+    ]
+  },
+  {
+    name: '历史',
+    tools: [
     { tool: TOOLS.UNDO, title: '撤销', icon: <IconUndo /> },
     { tool: TOOLS.CLEAR, title: '清空', icon: <IconClear /> }
-  ]
+    ]
+  }
+];
+
+const TOOL_GUIDES = {
+  [TOOLS.SELECT]: '选择对象；右键对象打开删除菜单，拖动画布可平移。',
+  [TOOLS.POINT]: '点击空白处创建点；贴近已有线或圆时会自动吸附。',
+  [TOOLS.SEGMENT]: '依次点击点创建连续线段；回到起点可封闭成图形，Esc 结束。',
+  [TOOLS.CIRCLE]: '按住拖拽确定圆心和半径。',
+  [TOOLS.RECTANGLE]: '拖拽创建矩形；按住 Shift 约束为正方形。',
+  [TOOLS.TRIANGLE]: '拖拽创建等腰三角形；按住 Shift 约束为等边三角形。',
+  [TOOLS.LABEL]: '点击点编辑标签。',
+  [TOOLS.ANGLE]: '依次选择边点、顶点、边点，生成角标记。',
+  [TOOLS.MIDPOINT]: '选择两个点，自动创建中点。',
+  [TOOLS.PARALLEL]: '先选参考线段，再选过线点。',
+  [TOOLS.PERPENDICULAR]: '先选参考线段，再选过线点。',
+  [TOOLS.ANGLE_BISECTOR]: '依次选择边点、顶点、边点，生成角平分线。'
+};
+
+const PROMPT_SUGGESTIONS = [
+  '画一个三角形 ABC，并作它的外接圆',
+  '过圆上一点作切线',
+  '求两圆交点并连接交点'
 ];
 
 export default function App() {
@@ -45,19 +77,21 @@ export default function App() {
   const controllerRef = useRef(null);
   const chatMessagesRef = useRef(null);
   const [activeTool, setActiveTool] = useState(TOOLS.SELECT);
-  const [status, setStatus] = useState('就绪 - 请在右侧输入绘图需求（右键平移，左键选择）');
+  const [status, setStatus] = useState('就绪 - 请在右侧输入绘图需求（左键选择，右键对象打开删除菜单）');
   const [messages, setMessages] = useState([{ role: 'ai', text: '你好！我是你的几何助手。你可以让我画三角形、作外接圆/内切圆、过圆上一点作切线，或求两圆交点。' }]);
   const [inputText, setInputText] = useState('');
+  const [isSending, setIsSending] = useState(false);
 
   useEffect(() => {
     const board = JXG.JSXGraph.initBoard(boardRef.current, {
-      boundingbox: [-10, 10, 10, -10],
+      boundingbox: INITIAL_BOUNDING_BOX,
       axis: false,
       grid: true,
       showCopyright: false,
       keepaspectratio: true,
       shownavigation: true,
       browserContext: 'ignore',
+      ignoreLabels: false,
       pan: { enabled: true, needTwoFingers: false, needShift: false },
       zoom: { wheel: true, needShift: false }
     });
@@ -119,7 +153,9 @@ export default function App() {
 
   const handleToolClick = (tool) => {
     if (tool === TOOLS.CLEAR) {
-      window.location.reload();
+      if (window.confirm('确定要清空当前画布并重置对话吗？')) {
+        window.location.reload();
+      }
       return;
     }
 
@@ -134,12 +170,37 @@ export default function App() {
     setActiveTool(tool);
   };
 
+  const adjustZoom = (scale) => {
+    const board = engineRef.current?.board;
+    if (!board) {
+      return;
+    }
+    const [left, top, right, bottom] = board.getBoundingBox();
+    const centerX = (left + right) / 2;
+    const centerY = (top + bottom) / 2;
+    const halfWidth = ((right - left) * scale) / 2;
+    const halfHeight = ((top - bottom) * scale) / 2;
+    board.setBoundingBox([centerX - halfWidth, centerY + halfHeight, centerX + halfWidth, centerY - halfHeight], true);
+    board.update();
+  };
+
+  const resetView = () => {
+    const board = engineRef.current?.board;
+    if (!board) {
+      return;
+    }
+    board.setBoundingBox(INITIAL_BOUNDING_BOX, true);
+    board.update();
+    setStatus('视图已复位');
+  };
+
   const handleSendMessage = async () => {
     const text = inputText.trim();
-    if (!text) {
+    if (!text || isSending) {
       return;
     }
 
+    setIsSending(true);
     setMessages((prev) => [...prev, { role: 'user', text }]);
     setInputText('');
     setStatus('AI 正在分析题意并绘图...');
@@ -172,8 +233,18 @@ export default function App() {
       console.error(error);
       setMessages((prev) => [...prev, { role: 'ai', text: '抱歉，无法连接到后端服务。' }]);
       setStatus('错误');
+    } finally {
+      setIsSending(false);
     }
   };
+
+  const canSend = inputText.trim().length > 0 && !isSending;
+  const activeGuide = TOOL_GUIDES[activeTool] || '选择一个工具开始操作。';
+  const statusTone = status.includes('错误') || status.includes('未执行')
+    ? 'danger'
+    : status.includes('需要') || status.includes('取消') || status.includes('过小')
+      ? 'warning'
+      : 'ready';
 
   return (
     <>
@@ -184,31 +255,63 @@ export default function App() {
       ></div>
 
       <div id="toolbar" className="floating-panel">
-        {TOOL_GROUPS.map((group, groupIndex) => (
-          <div key={groupIndex} className="tool-group">
-            {group.map((item) => (
+        {TOOL_GROUPS.map((group) => (
+          <div key={group.name} className="tool-group">
+            <div className="tool-group-label">{group.name}</div>
+            <div className="tool-grid">
+            {group.tools.map((item) => (
               <button
                 key={item.tool}
                 className={`tool-btn ${activeTool === item.tool ? 'active' : ''}`}
                 title={item.title}
+                aria-label={item.title}
+                aria-pressed={activeTool === item.tool}
                 onClick={() => handleToolClick(item.tool)}
               >
                 {item.icon}
               </button>
             ))}
+            </div>
           </div>
         ))}
       </div>
 
-      <div id="status-bar" className="floating-panel">
-        {status}
+      <div id="status-bar" className={`floating-panel ${statusTone}`}>
+        <span className="status-dot"></span>
+        <span>{status}</span>
+      </div>
+
+      <div id="tool-hint" className="floating-panel">
+        <div className="eyebrow">当前工具</div>
+        <strong>{activeTool}</strong>
+        <p>{activeGuide}</p>
+        <div className="shortcut-row">
+          <span>Esc 取消</span>
+          <span>Shift 约束</span>
+        </div>
+      </div>
+
+      <div id="view-controls" className="floating-panel" aria-label="画布视图控制">
+        <button onClick={() => adjustZoom(0.8)} aria-label="放大">+</button>
+        <button onClick={() => adjustZoom(1.25)} aria-label="缩小">−</button>
+        <button onClick={resetView} aria-label="复位视图">复位</button>
       </div>
 
       <div id="chat-container" className="floating-panel">
-        <div id="chat-header"><span>AI 几何助手</span></div>
+        <div id="chat-header">
+          <span>AI 几何助手</span>
+          <small>自然语言生成几何构造</small>
+        </div>
         <div id="chat-messages" ref={chatMessagesRef}>
           {messages.map((message, index) => (
             <div key={index} className={`message ${message.role}`}>{message.text}</div>
+          ))}
+        </div>
+        <div id="prompt-suggestions" aria-label="示例指令">
+          {PROMPT_SUGGESTIONS.map((suggestion) => (
+            <button key={suggestion} onClick={() => setInputText(suggestion)}>
+              {suggestion}
+            </button>
           ))}
         </div>
         <div id="chat-input-area">
@@ -217,10 +320,13 @@ export default function App() {
             id="chat-input"
             placeholder="描述题目意图..."
             value={inputText}
+            disabled={isSending}
             onChange={(event) => setInputText(event.target.value)}
             onKeyDown={(event) => event.key === 'Enter' && handleSendMessage()}
           />
-          <button id="send-btn" onClick={handleSendMessage}>发送</button>
+          <button id="send-btn" disabled={!canSend} onClick={handleSendMessage}>
+            {isSending ? '分析中' : '发送'}
+          </button>
         </div>
       </div>
     </>
