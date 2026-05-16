@@ -13,7 +13,7 @@ import java.util.stream.Collectors;
 public class GeometryChatService {
 
     static final Set<String> POINT_TYPES = Set.of("point", "glider");
-    static final Set<String> LINE_TYPES = Set.of("segment", "line", "parallel", "perpendicular", "tangent");
+    static final Set<String> LINE_TYPES = Set.of("segment", "line", "parallel", "perpendicular", "tangent", "functiongraph");
     static final Set<String> CIRCLE_TYPES = Set.of("circle", "circumcircle", "incircle");
 
     private final GeometryLlmClient llmClient;

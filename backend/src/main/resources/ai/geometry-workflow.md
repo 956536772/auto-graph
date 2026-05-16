@@ -77,6 +77,8 @@ Base actions are frontend-safe and may always be used:
 * `polygon`
 * `angle`
 * `bisector`
+* `function_graph`
+* `show_axis`
 
 High-level actions are allowed for word-problem drawing. The backend will expand them before the frontend sees the response:
 
@@ -116,6 +118,8 @@ High-level actions are allowed for word-problem drawing. The backend will expand
 * `polygon.params`: `{"points": [pointId, pointId, pointId]}` with at least three points.
 * `angle.params`: `{"p1": pointId, "vertex": pointId, "p2": pointId}`.
 * `bisector.params`: `{"p1": pointId, "vertex": pointId, "p2": pointId}`.
+* `function_graph.params`: `{"expr": "valid javascript math string using variable x"}`.
+* `show_axis.params`: `{"visible": boolean}`.
 
 ## High-Level Action Rules
 
@@ -139,5 +143,9 @@ High-level actions are allowed for word-problem drawing. The backend will expand
 * To draw a triangle from scratch, create three points then one polygon.
 * To draw a square from scratch, create four points then one polygon.
 * To draw a standalone circle, prefer numeric `cx`, `cy`, and positive `radius`.
+* For function graphs (e.g., "画出 y=x^2"):
+    1. Use `show_axis` with `{"visible": true}`.
+    2. Use `function_graph` with `{"expr": "x*x"}`.
+    3. Always convert math notation to JavaScript: `x^2` -> `x*x`, `sin(x)` -> `Math.sin(x)`, `e^x` -> `Math.exp(x)`.
 * For “画一条线段”, the backend has an exact special case; you do not need to optimize for that phrase.
 * For word problems such as “正方形 ABCD 内有正八边形 EFGHIJKL，且 E/G/I/K 在四边上，求边长”, return `instructions` that draw the square and octagon skeleton, usually with `regular_polygon` or `constraint_polygon`, and state that unsolved length/area constraints are approximate if needed.

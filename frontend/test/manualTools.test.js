@@ -34,6 +34,9 @@ test('ShapeRegistry keeps batched registrations in one undo step', () => {
   assert.equal(registry.undo(board), 'A');
   assert.deepEqual(removed, ['B', 'A']);
   assert.deepEqual(registry.history, []);
+
+  assert.equal(registry.redo(board), 'A');
+  assert.deepEqual(registry.history, ['A', 'B']);
 });
 
 test('ShapeRegistry can merge provisional steps into one undo step', () => {
@@ -57,7 +60,7 @@ test('ShapeRegistry can merge provisional steps into one undo step', () => {
   assert.deepEqual(registry.history, []);
 });
 
-test('ShapeRegistry removes an object and cleans history plus undo stack', () => {
+test('ShapeRegistry records delete as an undoable and redoable action', () => {
   const registry = new ShapeRegistry();
   const removed = [];
   const board = {
@@ -78,9 +81,118 @@ test('ShapeRegistry removes an object and cleans history plus undo stack', () =>
   assert.deepEqual(registry.history, ['A', 'C']);
   assert.equal(registry.exists('B'), false);
 
-  assert.equal(registry.undo(board), 'C');
-  assert.deepEqual(removed, ['B', 'C']);
-  assert.deepEqual(registry.history, ['A']);
+  assert.equal(registry.undo(board), 'B');
+  assert.deepEqual(registry.history, ['A', 'B', 'C']);
+  assert.equal(registry.exists('B'), true);
+
+  assert.equal(registry.redo(board), 'B');
+  assert.deepEqual(registry.history, ['A', 'C']);
+  assert.equal(registry.exists('B'), false);
+});
+
+test('ShapeRegistry snapshot actions support label and move undo redo', () => {
+  const registry = new ShapeRegistry();
+  const board = {
+    removeObject() {},
+    create(type, args, attrs) {
+      return {
+        elType: type,
+        X: () => args[0],
+        Y: () => args[1],
+        getName: () => attrs.name || '',
+        name: attrs.name || ''
+      };
+    },
+    update() {}
+  };
+  let x = 1;
+  let y = 2;
+  let name = 'A';
+  const point = {
+    elType: 'point',
+    X: () => x,
+    Y: () => y,
+    getName: () => name,
+    name
+  };
+
+  registry.register('P', point);
+
+  const beforeLabel = registry.snapshot();
+  name = 'B';
+  point.name = name;
+  registry.commitSnapshotAction('label', beforeLabel, registry.snapshot(), { label: 'label' });
+
+  assert.equal(registry.undo(board), 'label');
+  assert.equal(registry.get('P').getName(), 'A');
+  assert.equal(registry.redo(board), 'label');
+  assert.equal(registry.get('P').getName(), 'B');
+
+  const movedPoint = registry.get('P');
+  const beforeMove = registry.snapshot();
+  x = 4;
+  y = 5;
+  movedPoint.X = () => x;
+  movedPoint.Y = () => y;
+  registry.commitSnapshotAction('move', beforeMove, registry.snapshot(), { label: 'move' });
+
+  assert.equal(registry.undo(board), 'move');
+  assert.deepEqual([registry.get('P').X(), registry.get('P').Y()], [1, 2]);
+  assert.equal(registry.redo(board), 'move');
+  assert.deepEqual([registry.get('P').X(), registry.get('P').Y()], [4, 5]);
+});
+
+test('ShapeRegistry snapshots preserve derived line construction parents', () => {
+  const registry = new ShapeRegistry();
+  const restored = [];
+  const board = {
+    removeObject() {},
+    update() {}
+  };
+  registry.setSnapshotFactory((entry) => {
+    restored.push({
+      id: entry.id,
+      type: entry.type,
+      constructionType: entry.constructionType,
+      parentIds: entry.parentIds
+    });
+    return { elType: entry.type, meta: entry.meta };
+  });
+  const pointA = createObject('A');
+  const pointB = createObject('B');
+  const segment = { point1: pointA, point2: pointB };
+  const pointC = createObject('C');
+  const parallelLine = {
+    elType: 'line',
+    meta: {
+      historyAction: 'parallel',
+      historyParentIds: ['SEG', 'C']
+    }
+  };
+
+  registry.register('A', pointA);
+  registry.register('B', pointB);
+  registry.register('SEG', segment);
+  registry.register('C', pointC);
+  registry.register('PAR', parallelLine);
+
+  const parallelSnapshot = registry.snapshot().find((entry) => entry.id === 'PAR');
+  assert.equal(parallelSnapshot.type, 'line');
+  assert.equal(parallelSnapshot.constructionType, 'parallel');
+  assert.deepEqual(parallelSnapshot.parentIds, ['SEG', 'C']);
+
+  assert.equal(registry.undo(board), 'PAR');
+  assert.equal(registry.exists('PAR'), false);
+  assert.equal(registry.redo(board), 'PAR');
+  assert.deepEqual(restored.at(-1), {
+    id: 'PAR',
+    type: 'line',
+    constructionType: 'parallel',
+    parentIds: ['SEG', 'C']
+  });
+
+  assert.equal(registry.removeObject(board, registry.get('SEG')), 'SEG');
+  assert.equal(registry.exists('PAR'), false);
 });
 
 test('ShapeRegistry removes dependent geometry when deleting a point', () => {

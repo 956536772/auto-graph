@@ -22,7 +22,9 @@ final class GeometryCapabilityContract {
         "otherintersection",
         "polygon",
         "angle",
-        "bisector"
+        "bisector",
+        "function_graph",
+        "show_axis"
     );
 
     private GeometryCapabilityContract() {
@@ -104,8 +106,24 @@ final class GeometryCapabilityContract {
                 "vertex", GeometryChatService.POINT_TYPES,
                 "p2", GeometryChatService.POINT_TYPES
             ));
+            case "function_graph" -> validateFunctionGraph(params);
+            case "show_axis" -> validateShowAxis(params);
             default -> ValidationResult.invalid("unsupported_action");
         };
+    }
+
+    private static ValidationResult validateFunctionGraph(Map<String, Object> params) {
+        if (!(params.get("expr") instanceof String expr) || expr.isBlank()) {
+            return ValidationResult.invalid("missing_required_param");
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateShowAxis(Map<String, Object> params) {
+        if (params.containsKey("visible") && !(params.get("visible") instanceof Boolean)) {
+            return ValidationResult.invalid("invalid_param_shape");
+        }
+        return ValidationResult.ok();
     }
 
     private static ValidationResult validateCircle(Map<String, Object> params, Map<String, GeometryObjectInfo> known) {
@@ -302,6 +320,7 @@ record GeometryObjectInfo(String type, Anchor position, Anchor center, Double ra
             case "segment", "parallel", "perpendicular", "tangent", "bisector" -> new GeometryObjectInfo(action, null, null, null, null);
             case "circle" -> circleInfo(params);
             case "circumcircle", "incircle" -> new GeometryObjectInfo(action, null, null, null, null);
+            case "function_graph" -> new GeometryObjectInfo("functiongraph", null, null, null, null);
             case "polygon" -> new GeometryObjectInfo("polygon", null, null, null, null);
             case "angle" -> new GeometryObjectInfo("angle", null, null, null, null);
             default -> new GeometryObjectInfo(action, null, null, null, null);

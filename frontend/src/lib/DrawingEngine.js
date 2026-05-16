@@ -5,6 +5,13 @@ export class DrawingEngine {
         this.board = board;
         this.registry = registry;
         this.options = options;
+        this.registry.setSnapshotFactory?.((entry) => this.createObjectFromSnapshot(entry));
+        this.registry.setRestoreHandler?.((obj, entry) => {
+            this.attachHistoryListeners(obj);
+            if (typeof this.options.onObjectCreated === 'function') {
+                this.options.onObjectCreated(obj, { restored: true, snapshot: entry });
+            }
+        });
     }
     execute(instructions) {
         const created = [];
@@ -28,13 +35,7 @@ export class DrawingEngine {
     processInstruction(ins) {
         const { action, params, result_id, label, meta } = ins;
         let obj = null;
-        const commonAttr = {
-            name: label || '',
-            withLabel: !!label,
-            size: 3,
-            strokeWidth: 2,
-            label: { fixed: false }
-        };
+        const commonAttr = this.getCommonAttributes(label);
 
         try {
             switch (action) {
@@ -233,16 +234,41 @@ export class DrawingEngine {
                         strokeWidth: 2
                     });
                     break;
+                case 'function_graph':
+                    obj = this.board.create('functiongraph', [new Function('x', `return ${params.expr};`)], {
+                        ...commonAttr,
+                        strokeColor: '#1890ff',
+                        strokeWidth: 2
+                    });
+                    obj.meta = { ...(obj.meta || {}), expr: params.expr };
+                    break;
+                case 'show_axis': {
+                    const visible = params.visible !== false;
+                    if (this.board.defaultAxes) {
+                        if (this.board.defaultAxes.x) this.board.defaultAxes.x.setAttribute({ visible });
+                        if (this.board.defaultAxes.y) this.board.defaultAxes.y.setAttribute({ visible });
+                    } else if (visible) {
+                        this.board.create('axis', [[0, 0], [1, 0]], { name: 'x', withLabel: true, label: { offset: [520, -15] } });
+                        this.board.create('axis', [[0, 0], [0, 1]], { name: 'y', withLabel: true, label: { offset: [-15, 260] } });
+                    }
+                    this.board.update();
+                    break;
+                }
             }
         } catch (e) {
             console.error('创建形状失败:', e);
         }
 
         if (obj && result_id) {
+            const historyMeta = this.getHistoryMeta(ins);
+            if (Object.keys(historyMeta).length > 0) {
+                obj.meta = { ...(obj.meta || {}), ...historyMeta };
+            }
             if (meta && typeof meta === 'object') {
                 obj.meta = { ...(obj.meta || {}), ...meta };
             }
             this.registry.register(result_id, obj);
+            this.attachHistoryListeners(obj);
         }
 
         if (obj && typeof this.options.onObjectCreated === 'function') {
@@ -251,9 +277,208 @@ export class DrawingEngine {
 
         return obj;
     }
+    getCommonAttributes(label) {
+        return {
+            name: label || '',
+            withLabel: !!label,
+            size: 3,
+            strokeWidth: 2,
+            label: { fixed: false }
+        };
+    }
+    createObjectFromSnapshot(entry) {
+        const commonAttr = this.getCommonAttributes(entry.label);
+        const type = entry.constructionType || entry.type;
+        let obj = null;
+
+        try {
+            switch (type) {
+                case 'point':
+                    obj = this.board.create('point', entry.coords || [entry.position?.x || 0, entry.position?.y || 0], commonAttr);
+                    break;
+                case 'glider': {
+                    const path = this.registry.get(entry.pathId);
+                    if (path) {
+                        const coords = entry.coords || [entry.position?.x || 0, entry.position?.y || 0];
+                        obj = this.board.create('glider', [coords[0], coords[1], path], commonAttr);
+                    } else {
+                        obj = this.board.create('point', entry.coords || [entry.position?.x || 0, entry.position?.y || 0], commonAttr);
+                    }
+                    break;
+                }
+                case 'segment':
+                case 'line': {
+                    const points = (entry.endpointIds || []).map((id) => this.registry.get(id)).filter(Boolean);
+                    if (points.length === 2) {
+                        obj = this.board.create(type, points, { ...commonAttr, draggable: true });
+                        this.addHoverCursor(obj);
+                    }
+                    break;
+                }
+                case 'midpoint': {
+                    const points = (entry.parentIds || entry.endpointIds || []).map((id) => this.registry.get(id)).filter(Boolean);
+                    if (points.length >= 2) {
+                        obj = this.board.create('midpoint', [points[0], points[1]], commonAttr);
+                    }
+                    break;
+                }
+                case 'perpendicular':
+                case 'parallel': {
+                    const parents = (entry.parentIds || []).map((id) => this.registry.get(id)).filter(Boolean);
+                    if (parents.length >= 2) {
+                        obj = this.board.create(type, [parents[0], parents[1]], { ...commonAttr, draggable: true });
+                        this.addHoverCursor(obj);
+                    }
+                    break;
+                }
+                case 'circle': {
+                    const center = this.registry.get(entry.centerId);
+                    const through = this.registry.get(entry.radiusPointId);
+                    if (center && through) {
+                        obj = this.board.create('circle', [center, through], {
+                            ...commonAttr, draggable: true, hasInnerPoints: true,
+                            fillColor: '#1890ff', fillOpacity: 0.1
+                        });
+                    } else if (center && typeof entry.radius === 'number') {
+                        const throughPoint = this.board.create('point', [center.X() + entry.radius, center.Y()], {
+                            visible: false,
+                            name: '',
+                            fixed: true,
+                            highlight: false,
+                            showInfobox: false
+                        });
+                        obj = this.board.create('circle', [center, throughPoint], {
+                            ...commonAttr, draggable: true, hasInnerPoints: true,
+                            fillColor: '#1890ff', fillOpacity: 0.1
+                        });
+                        this.attachTranslationDrag(obj, [center, throughPoint]);
+                        obj.on('remove', () => this.safeRemoveObject(throughPoint));
+                    }
+                    if (obj) this.addHoverCursor(obj);
+                    break;
+                }
+                case 'circumcircle':
+                case 'incircle': {
+                    const parents = (entry.parentIds || entry.pointIds || []).map((id) => this.registry.get(id)).filter(Boolean);
+                    if (parents.length >= 3) {
+                        obj = this.board.create(type, [parents[0], parents[1], parents[2]], {
+                            ...commonAttr, draggable: true, hasInnerPoints: true,
+                            fillColor: '#1890ff', fillOpacity: 0.1
+                        });
+                        this.addHoverCursor(obj);
+                    }
+                    break;
+                }
+                case 'polygon': {
+                    const points = (entry.vertexIds || []).map((id) => this.registry.get(id)).filter(Boolean);
+                    if (points.length >= 3) {
+                        obj = this.board.create('polygon', points, {
+                            ...commonAttr, fillColor: '#1890ff', fillOpacity: 0.2,
+                            draggable: true, hasInnerPoints: true
+                        });
+                        this.addHoverCursor(obj);
+                    }
+                    break;
+                }
+                case 'angle': {
+                    const points = (entry.pointIds || entry.parentIds || []).map((id) => this.registry.get(id)).filter(Boolean);
+                    if (points.length >= 3) {
+                        obj = this.board.create('angle', [points[0], points[1], points[2]], {
+                            ...commonAttr,
+                            radius: 1,
+                            fillColor: '#91caff',
+                            fillOpacity: 0.2,
+                            strokeColor: '#0958d9',
+                            strokeWidth: 2
+                        });
+                    }
+                    break;
+                }
+                case 'tangent': {
+                    const parents = (entry.parentIds || []).map((id) => this.registry.get(id)).filter(Boolean);
+                    if (parents.length >= 2) {
+                        obj = this.board.create('tangent', [parents[0], parents[1]], { ...commonAttr, draggable: true });
+                        this.addHoverCursor(obj);
+                    }
+                    break;
+                }
+                case 'bisector': {
+                    const parents = (entry.parentIds || entry.pointIds || []).map((id) => this.registry.get(id)).filter(Boolean);
+                    if (parents.length >= 3) {
+                        obj = this.board.create('bisector', [parents[0], parents[1], parents[2]], { ...commonAttr, draggable: true });
+                        this.addHoverCursor(obj);
+                    }
+                    break;
+                }
+                default:
+                    obj = { id: entry.id, elType: entry.type };
+                    break;
+            }
+        } catch (error) {
+            console.error('恢复形状失败:', error);
+        }
+
+        return obj;
+    }
+    getHistoryMeta(instruction) {
+        const { action, params = {} } = instruction;
+        const parentRefsByAction = {
+            segment: [params.p1, params.p2],
+            midpoint: [params.p1, params.p2],
+            perpendicular: [params.line, params.point],
+            parallel: [params.line, params.point],
+            tangent: [params.circle, params.point],
+            bisector: [params.p1, params.vertex, params.p2],
+            angle: [params.p1, params.vertex, params.p2],
+            circumcircle: [params.p1, params.p2, params.p3],
+            incircle: [params.p1, params.p2, params.p3],
+            intersection: [params.first, params.second],
+            otherintersection: [params.first, params.second, params.known]
+        };
+        const parentIds = (parentRefsByAction[action] || [])
+            .map((ref) => this.toRegistryId(ref))
+            .filter(Boolean);
+        if (parentIds.length === 0) {
+            return {};
+        }
+        return {
+            historyAction: action,
+            historyParentIds: parentIds
+        };
+    }
+    toRegistryId(ref) {
+        if (!ref) {
+            return null;
+        }
+        if (typeof ref === 'string') {
+            return this.registry.exists(ref) ? ref : null;
+        }
+        return this.registry.idForObject(ref);
+    }
     addHoverCursor(obj) {
         obj.on('over', () => { document.body.style.cursor = 'move'; });
         obj.on('out', () => { document.body.style.cursor = 'default'; });
+    }
+    attachHistoryListeners(obj) {
+        if (!obj || typeof obj.on !== 'function' || obj.__historyListenersAttached) {
+            return;
+        }
+
+        obj.__historyListenersAttached = true;
+        let dragStartSnapshot = null;
+
+        obj.on('down', () => {
+            dragStartSnapshot = this.registry.snapshot?.() || null;
+        });
+
+        obj.on('up', () => {
+            if (!dragStartSnapshot) {
+                return;
+            }
+            const after = this.registry.snapshot?.() || [];
+            this.registry.commitSnapshotAction?.('move', dragStartSnapshot, after, { label: 'move' });
+            dragStartSnapshot = null;
+        });
     }
     resolveRef(ref) {
         if (!ref) {

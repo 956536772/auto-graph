@@ -13,7 +13,7 @@ import { chooseTargetFromElements, isRegisteredSelectableElement, preferPointSna
 
 const POINT_TYPES = new Set(['point', 'glider']);
 const LINE_TYPES = ['segment', 'line', 'parallel', 'perpendicular', 'bisector', 'tangent'];
-const PATH_TYPES = new Set([...LINE_TYPES, 'circle', 'ellipse']);
+const PATH_TYPES = new Set([...LINE_TYPES, 'circle', 'ellipse', 'functiongraph']);
 const LINEAR_PATH_TYPES = new Set(LINE_TYPES);
 const SNAP_RADIUS_PX = 14;
 const PREVIEW_ATTRS = {
@@ -406,7 +406,11 @@ export class ManualDrawingController {
 
     openPointLabelEditor(target.obj, {
       board: this.board,
-      suggestLabel: () => getNextPointLabel(this.registry)
+      suggestLabel: () => getNextPointLabel(this.registry),
+      onBeforeLabelEdit: () => this.registry.snapshot(),
+      onLabelEdit: ({ beforeState }) => {
+        this.registry.commitSnapshotAction('label', beforeState, this.registry.snapshot(), { label: 'label' });
+      }
     });
     this.completeAndReturn('点标签已更新');
   }

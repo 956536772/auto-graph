@@ -14,6 +14,7 @@ const IconPoint = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="no
 const IconSegment = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><circle cx="5" cy="12" r="1"></circle><circle cx="19" cy="12" r="1"></circle></svg>;
 const IconCircle = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"></circle></svg>;
 const IconUndo = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13"></path></svg>;
+const IconRedo = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 7v6h-6"></path><path d="M3 17a9 9 0 019-9 9 9 0 016 2.3L21 13"></path></svg>;
 const IconClear = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg>;
 const ToolGlyph = ({ text }) => <span className="tool-glyph">{text}</span>;
 
@@ -44,6 +45,7 @@ const TOOL_GROUPS = [
     name: '历史',
     tools: [
     { tool: TOOLS.UNDO, title: '撤销', icon: <IconUndo /> },
+    { tool: TOOLS.REDO, title: '重做', icon: <IconRedo /> },
     { tool: TOOLS.CLEAR, title: '清空', icon: <IconClear /> }
     ]
   }
@@ -66,8 +68,8 @@ const TOOL_GUIDES = {
 
 const PROMPT_SUGGESTIONS = [
   '画一个三角形 ABC，并作它的外接圆',
-  '过圆上一点作切线',
-  '求两圆交点并连接交点'
+  '画出 y = x^2 的图像',
+  '过圆上一点作切线'
 ];
 
 export default function App() {
@@ -102,7 +104,11 @@ export default function App() {
       }
       ensurePointLabelEditor(obj, {
         board,
-        suggestLabel: () => getNextPointLabel(registryRef.current)
+        suggestLabel: () => getNextPointLabel(registryRef.current),
+        onBeforeLabelEdit: () => registryRef.current.snapshot(),
+        onLabelEdit: ({ beforeState }) => {
+          registryRef.current.commitSnapshotAction('label', beforeState, registryRef.current.snapshot(), { label: 'label' });
+        }
       });
     };
 
@@ -164,6 +170,14 @@ export default function App() {
       const removedId = board ? registryRef.current.undo(board) : null;
       controllerRef.current?.resetState();
       setStatus(removedId ? '已撤销上一步操作' : '没有可撤销的操作');
+      return;
+    }
+
+    if (tool === TOOLS.REDO) {
+      const board = engineRef.current?.board;
+      const restoredId = board ? registryRef.current.redo(board) : null;
+      controllerRef.current?.resetState();
+      setStatus(restoredId ? '已重做上一步操作' : '没有可重做的操作');
       return;
     }
 

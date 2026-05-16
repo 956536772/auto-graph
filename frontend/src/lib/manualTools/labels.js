@@ -81,10 +81,18 @@ export function getNextPointLabel(registry) {
   return `P${index}`;
 }
 
-export function ensurePointLabelEditor(point, { board, suggestLabel } = {}) {
+export function ensurePointLabelEditor(point, { board, suggestLabel, onBeforeLabelEdit, onLabelEdit } = {}) {
   if (!point) {
     return null;
   }
+
+  point.__labelEditorOptions = {
+    ...(point.__labelEditorOptions || {}),
+    ...(board ? { board } : {}),
+    ...(suggestLabel ? { suggestLabel } : {}),
+    ...(onBeforeLabelEdit ? { onBeforeLabelEdit } : {}),
+    ...(onLabelEdit ? { onLabelEdit } : {})
+  };
 
   makePointLabelMovable(point);
 
@@ -94,8 +102,10 @@ export function ensurePointLabelEditor(point, { board, suggestLabel } = {}) {
   }
 
   const openEditor = () => {
-    const fallback = typeof suggestLabel === 'function' ? suggestLabel(point) : '';
+    const options = point.__labelEditorOptions || {};
+    const fallback = typeof options.suggestLabel === 'function' ? options.suggestLabel(point) : '';
     const currentLabel = readPointLabel(point);
+    const beforeState = options.onBeforeLabelEdit?.(point);
     const nextLabel = window.prompt('输入点标签', currentLabel || fallback);
 
     if (nextLabel === null) {
@@ -103,8 +113,16 @@ export function ensurePointLabelEditor(point, { board, suggestLabel } = {}) {
     }
 
     const normalized = setPointLabel(point, nextLabel);
-    if (board) {
-      board.update();
+    if (options.board) {
+      options.board.update();
+    }
+    if (normalized !== currentLabel) {
+      options.onLabelEdit?.({
+        point,
+        beforeState,
+        previousLabel: currentLabel,
+        nextLabel: normalized
+      });
     }
     attachLabelListener(point, openEditor);
     return normalized;

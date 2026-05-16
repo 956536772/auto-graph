@@ -12,6 +12,7 @@ export const TOOLS = {
   MIDPOINT: '中点',
   ANGLE_BISECTOR: '角平分线',
   UNDO: '撤销',
+  REDO: '重做',
   CLEAR: '清空'
 };
 
