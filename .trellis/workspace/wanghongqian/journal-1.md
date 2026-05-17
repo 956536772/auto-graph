@@ -439,3 +439,34 @@ Reverted all CSS changes back to the state in Session 12. This restores the orig
 ### Next Steps
 
 - None - task complete
+
+
+## Session 15: Selective Point Visibility in Export
+
+**Date**: 2026-05-17
+**Task**: Selective Point Visibility in Export
+**Branch**: `main`
+
+### Summary
+
+Modified the SVG export logic to specifically handle circle centers. Circle centers are now preserved and styled as solid black dots, while all other points are hidden in the final output. This provides a professional geometry export that matches exam paper styles.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
