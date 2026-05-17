@@ -16,6 +16,8 @@ final class GeometryInstructionExpander {
         "point_on_circle",
         "parallel_through_point_to_segment",
         "perpendicular_through_point_to_segment",
+        "perpendicular_foot_segment",
+        "angle_bisector_segment",
         "divide_segment",
         "point_by_ratio",
         "translate_point",
@@ -68,6 +70,8 @@ final class GeometryInstructionExpander {
             case "point_on_circle" -> pointOnCircle(instruction, state);
             case "parallel_through_point_to_segment" -> lineThroughPointToSegment(instruction, state, "parallel");
             case "perpendicular_through_point_to_segment" -> lineThroughPointToSegment(instruction, state, "perpendicular");
+            case "perpendicular_foot_segment" -> perpendicularFootSegment(instruction, state);
+            case "angle_bisector_segment" -> angleBisectorSegment(instruction, state);
             case "divide_segment" -> divideSegment(instruction, state);
             case "point_by_ratio" -> pointByRatio(instruction, state);
             case "translate_point" -> translatePoint(instruction, state);
@@ -137,6 +141,118 @@ final class GeometryInstructionExpander {
             return StepExpansion.invalid("missing_required_param");
         }
         return state.addBase(new DrawingInstruction(action, Map.of("line", segment, "point", point), instruction.resultId(), null));
+    }
+
+    private static StepExpansion perpendicularFootSegment(DrawingInstruction instruction, ExpansionState state) {
+        var params = params(instruction);
+        var pointRef = stringParam(params, "point").orElse(null);
+        var footResultId = stringParam(params, "footResultId").orElse(null);
+        if (pointRef == null || footResultId == null) {
+            return StepExpansion.invalid("missing_required_param");
+        }
+
+        var baseRef = stringParam(params, "segment").orElse(stringParam(params, "line").orElse(null));
+        var endpoints = state.segmentEndpoints(baseRef, params);
+        if (endpoints.isEmpty()) {
+            return StepExpansion.invalid("missing_required_param");
+        }
+
+        var point = state.anchor(pointRef).orElse(null);
+        var baseStart = state.anchor(endpoints.get().p1()).orElse(null);
+        var baseEnd = state.anchor(endpoints.get().p2()).orElse(null);
+        if (point == null || baseStart == null || baseEnd == null) {
+            return StepExpansion.invalid("missing_required_param");
+        }
+
+        var dx = baseEnd.x() - baseStart.x();
+        var dy = baseEnd.y() - baseStart.y();
+        var lengthSquared = dx * dx + dy * dy;
+        if (lengthSquared < 0.000001d) {
+            return StepExpansion.invalid("invalid_geometry");
+        }
+
+        var ratio = ((point.x() - baseStart.x()) * dx + (point.y() - baseStart.y()) * dy) / lengthSquared;
+        var footX = baseStart.x() + ratio * dx;
+        var footY = baseStart.y() + ratio * dy;
+        var footLabel = stringParam(params, "footLabel").orElse(instruction.label());
+
+        var foot = state.addBase(new DrawingInstruction(
+            "place_point",
+            Map.of("x", round(footX), "y", round(footY)),
+            footResultId,
+            footLabel
+        ));
+        if (!foot.valid()) {
+            return foot;
+        }
+
+        var segment = state.addBase(new DrawingInstruction(
+            "segment",
+            Map.of("p1", pointRef, "p2", footResultId),
+            instruction.resultId(),
+            null
+        ));
+        if (!segment.valid()) {
+            return segment;
+        }
+
+        var output = new ArrayList<DrawingInstruction>();
+        output.addAll(foot.instructions());
+        output.addAll(segment.instructions());
+        return StepExpansion.ok(output, List.of());
+    }
+
+    private static StepExpansion angleBisectorSegment(DrawingInstruction instruction, ExpansionState state) {
+        var params = params(instruction);
+        var p1Ref = stringParam(params, "p1").orElse(null);
+        var vertexRef = stringParam(params, "vertex").orElse(null);
+        var p2Ref = stringParam(params, "p2").orElse(null);
+        var endpointResultId = stringParam(params, "endpointResultId").orElse(null);
+        if (p1Ref == null || vertexRef == null || p2Ref == null || endpointResultId == null) {
+            return StepExpansion.invalid("missing_required_param");
+        }
+
+        var p1 = state.anchor(p1Ref).orElse(null);
+        var vertex = state.anchor(vertexRef).orElse(null);
+        var p2 = state.anchor(p2Ref).orElse(null);
+        if (p1 == null || vertex == null || p2 == null) {
+            return StepExpansion.invalid("missing_required_param");
+        }
+
+        var vertexToP1 = distance(vertex, p1);
+        var vertexToP2 = distance(vertex, p2);
+        if (vertexToP1 < 0.000001d || vertexToP2 < 0.000001d) {
+            return StepExpansion.invalid("invalid_geometry");
+        }
+
+        var endpointX = (vertexToP2 * p1.x() + vertexToP1 * p2.x()) / (vertexToP1 + vertexToP2);
+        var endpointY = (vertexToP2 * p1.y() + vertexToP1 * p2.y()) / (vertexToP1 + vertexToP2);
+        var endpointLabel = stringParam(params, "endpointLabel").orElse(instruction.label());
+
+        var endpoint = state.addBase(new DrawingInstruction(
+            "place_point",
+            Map.of("x", round(endpointX), "y", round(endpointY)),
+            endpointResultId,
+            endpointLabel
+        ));
+        if (!endpoint.valid()) {
+            return endpoint;
+        }
+
+        var segment = state.addBase(new DrawingInstruction(
+            "segment",
+            Map.of("p1", vertexRef, "p2", endpointResultId),
+            instruction.resultId(),
+            null
+        ));
+        if (!segment.valid()) {
+            return segment;
+        }
+
+        var output = new ArrayList<DrawingInstruction>();
+        output.addAll(endpoint.instructions());
+        output.addAll(segment.instructions());
+        return StepExpansion.ok(output, List.of());
     }
 
     private static StepExpansion divideSegment(DrawingInstruction instruction, ExpansionState state) {
@@ -472,17 +588,30 @@ final class GeometryInstructionExpander {
         }
 
         Optional<Anchor> anchor(String ref) {
-            return Optional.ofNullable(ref)
-                .map(known::get)
-                .map(ObjectInfo::anchor);
+            if (ref == null) return Optional.empty();
+            var info = known.get(ref);
+            if (info != null) {
+                return Optional.ofNullable(info.anchor());
+            }
+            var candidates = candidatesByLabel(ref, GeometryChatService.POINT_TYPES);
+            return candidates.size() == 1 ? Optional.ofNullable(candidates.get(0).anchor()) : Optional.empty();
         }
 
         Optional<CircleInfo> circle(String ref) {
+            if (ref == null) return Optional.empty();
             var info = known.get(ref);
-            if (info == null || info.center() == null || info.radius() == null) {
-                return Optional.empty();
+            if (info != null && info.center() != null && info.radius() != null) {
+                return Optional.of(new CircleInfo(info.center(), info.radius()));
             }
-            return Optional.of(new CircleInfo(info.center(), info.radius()));
+            var candidates = candidatesByLabel(ref, GeometryChatService.CIRCLE_TYPES);
+            return candidates.size() == 1 ? Optional.of(new CircleInfo(candidates.get(0).center(), candidates.get(0).radius())) : Optional.empty();
+        }
+
+        private List<ObjectInfo> candidatesByLabel(String label, Set<String> allowedTypes) {
+            return known.values().stream()
+                .filter(info -> allowedTypes.contains(info.type()))
+                .filter(info -> label.equalsIgnoreCase(java.util.Objects.toString(info.label(), "")))
+                .toList();
         }
 
         Optional<SegmentRefs> segmentEndpoints(String segmentId, Map<String, Object> params) {
@@ -510,14 +639,15 @@ final class GeometryInstructionExpander {
         }
     }
 
-    private record ObjectInfo(String type, Anchor anchor, Anchor center, Double radius, SegmentRefs endpoints) {
+    private record ObjectInfo(String type, String label, Anchor anchor, Anchor center, Double radius, SegmentRefs endpoints) {
         static ObjectInfo from(CanvasObject object) {
             return new ObjectInfo(
                 object.type(),
+                object.label(),
                 object.anchor(),
                 object.center(),
                 object.radius(),
-                object.endpointLabels().size() == 2 ? new SegmentRefs(object.endpointLabels().get(0), object.endpointLabels().get(1)) : null
+                object.endpointRefs().size() == 2 ? new SegmentRefs(object.endpointRefs().get(0), object.endpointRefs().get(1)) : null
             );
         }
 
@@ -526,6 +656,7 @@ final class GeometryInstructionExpander {
             return switch (instruction.action()) {
                 case "place_point" -> new ObjectInfo(
                     "point",
+                    instruction.label(),
                     new Anchor(numberParam(params, "x").orElse(0d), numberParam(params, "y").orElse(0d)),
                     null,
                     null,
@@ -533,6 +664,7 @@ final class GeometryInstructionExpander {
                 );
                 case "segment" -> new ObjectInfo(
                     "segment",
+                    instruction.label(),
                     null,
                     null,
                     null,
@@ -541,29 +673,29 @@ final class GeometryInstructionExpander {
                         stringParam(params, "p2").orElse("")
                     )
                 );
-                case "circle" -> circleInfo(params, state);
-                case "polygon" -> new ObjectInfo("polygon", null, null, null, null);
-                case "midpoint", "intersection", "otherintersection" -> new ObjectInfo("point", null, null, null, null);
-                case "parallel", "perpendicular", "tangent", "bisector" -> new ObjectInfo(instruction.action(), null, null, null, null);
-                case "circumcircle", "incircle" -> new ObjectInfo(instruction.action(), null, null, null, null);
-                case "angle" -> new ObjectInfo("angle", null, null, null, null);
-                default -> new ObjectInfo(instruction.action(), null, null, null, null);
+                case "circle" -> circleInfo(instruction, params, state);
+                case "polygon" -> new ObjectInfo("polygon", instruction.label(), null, null, null, null);
+                case "midpoint", "intersection", "otherintersection" -> new ObjectInfo("point", instruction.label(), null, null, null, null);
+                case "parallel", "perpendicular", "tangent", "bisector" -> new ObjectInfo(instruction.action(), instruction.label(), null, null, null, null);
+                case "circumcircle", "incircle" -> new ObjectInfo(instruction.action(), instruction.label(), null, null, null, null);
+                case "angle" -> new ObjectInfo("angle", instruction.label(), null, null, null, null);
+                default -> new ObjectInfo(instruction.action(), instruction.label(), null, null, null, null);
             };
         }
 
-        private static ObjectInfo circleInfo(Map<String, Object> params, ExpansionState state) {
+        private static ObjectInfo circleInfo(DrawingInstruction instruction, Map<String, Object> params, ExpansionState state) {
             var cx = numberParam(params, "cx");
             var cy = numberParam(params, "cy");
             var radius = numberParam(params, "radius");
             if (cx.isPresent() && cy.isPresent() && radius.isPresent()) {
-                return new ObjectInfo("circle", null, new Anchor(cx.get(), cy.get()), radius.get(), null);
+                return new ObjectInfo("circle", instruction.label(), null, new Anchor(cx.get(), cy.get()), radius.get(), null);
             }
             var center = state.anchor(stringParam(params, "center").orElse(null)).orElse(null);
             var through = state.anchor(stringParam(params, "through").orElse(null)).orElse(null);
             if (center != null && through != null) {
-                return new ObjectInfo("circle", null, center, distance(center, through), null);
+                return new ObjectInfo("circle", instruction.label(), null, center, distance(center, through), null);
             }
-            return new ObjectInfo("circle", null, null, null, null);
+            return new ObjectInfo("circle", instruction.label(), null, null, null, null);
         }
     }
 }

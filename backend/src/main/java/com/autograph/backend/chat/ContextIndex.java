@@ -42,7 +42,7 @@ final class ContextIndex {
         var targets = Set.of(first, second);
         return objects.stream()
             .filter(obj -> GeometryChatService.LINE_TYPES.contains(obj.type()))
-            .filter(obj -> Set.copyOf(obj.endpointLabels()).equals(targets))
+            .filter(obj -> Set.copyOf(obj.endpointRefs()).equals(targets))
             .findFirst();
     }
 
@@ -89,17 +89,43 @@ final class ContextIndex {
 
     List<Map<String, Object>> toLlmSummary() {
         return objects.stream()
-            .map(obj -> Map.<String, Object>of(
-                "id", obj.id(),
-                "type", obj.type(),
-                "label", Objects.toString(obj.label(), ""),
-                "order", obj.order(),
-                "position", obj.anchor() == null ? Map.of() : Map.of("x", obj.anchor().x(), "y", obj.anchor().y()),
-                "center", obj.center() == null ? Map.of() : Map.of("x", obj.center().x(), "y", obj.center().y()),
-                "radius", obj.radius() == null ? 0d : obj.radius(),
-                "endpointLabels", obj.endpointLabels(),
-                "centerLabel", Objects.toString(obj.centerLabel(), "")
-            ))
+            .map(this::toLlmObject)
             .toList();
+    }
+
+    private Map<String, Object> toLlmObject(CanvasObject obj) {
+        var summary = new java.util.LinkedHashMap<String, Object>();
+        summary.put("id", obj.id());
+        summary.put("type", obj.type());
+        summary.put("label", Objects.toString(obj.label(), ""));
+        summary.put("order", obj.order());
+        summary.put("position", anchorSummary(obj.anchor()));
+        summary.put("center", anchorSummary(obj.center()));
+        summary.put("radius", obj.radius() == null ? 0d : obj.radius());
+        summary.put("endpointLabels", obj.endpointLabels());
+        summary.put("endpointRefs", obj.endpointRefs());
+        summary.put("centerLabel", Objects.toString(obj.centerLabel(), ""));
+        if (!obj.endpoints().isEmpty()) {
+            summary.put("endpoints", obj.endpoints().stream().map(ContextIndex::pointSummary).toList());
+        }
+        if (!obj.vertices().isEmpty()) {
+            summary.put("vertices", obj.vertices().stream().map(ContextIndex::pointSummary).toList());
+        }
+        if (!obj.points().isEmpty()) {
+            summary.put("points", obj.points().stream().map(ContextIndex::pointSummary).toList());
+        }
+        return summary;
+    }
+
+    private static Map<String, Object> pointSummary(CanvasPointPayload point) {
+        var summary = new java.util.LinkedHashMap<String, Object>();
+        summary.put("id", Objects.toString(point.id(), ""));
+        summary.put("label", Objects.toString(point.label(), ""));
+        summary.put("position", anchorSummary(point.anchor()));
+        return summary;
+    }
+
+    private static Map<String, Object> anchorSummary(Anchor anchor) {
+        return anchor == null ? Map.of() : Map.of("x", anchor.x(), "y", anchor.y());
     }
 }

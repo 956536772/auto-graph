@@ -250,7 +250,10 @@ final class GeometryCapabilityContract {
         var object = known.get(ref);
         if (object == null) {
             var candidates = candidatesByLabel(ref, known, allowedTypes);
-            if (!candidates.isEmpty()) {
+            if (candidates.size() == 1) {
+                return ValidationResult.ok();
+            }
+            if (candidates.size() > 1) {
                 return ValidationResult.clarify(Clarification.fromCandidates("我不确定你指的是哪一个对象，请明确说出对象 ID。", candidates));
             }
             return ValidationResult.invalid("unknown_reference");

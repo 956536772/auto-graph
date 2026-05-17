@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GeometryLlmClientTests {
@@ -60,6 +61,72 @@ class GeometryLlmClientTests {
 
         assertEquals(LlmDirectStatus.INVALID, result.status());
         assertEquals(LlmFailureReason.INVALID_INTENT, result.reason());
+    }
+
+    @Test
+    void shouldPromptWithCurrentCanvasOnly() {
+        var chatModel = new CapturingChatModel("""
+            {"mode":"instructions","responseText":"ok","instructions":[{"action":"place_point","params":{"x":0,"y":0},"result_id":"M","label":"M"}]}
+            """);
+        var client = new GeometryLlmClient(chatModel, objectMapper, "test-key", true, "workflow-body");
+
+        client.extractInstructions(
+            "继续作AB中点",
+            ContextIndex.from(List.of(
+                new CanvasObjectPayload(
+                    "AB",
+                    "segment",
+                    null,
+                    2,
+                    null,
+                    null,
+                    null,
+                    null,
+                    List.of("A", "B"),
+                    null,
+                    List.of(
+                        new CanvasPointPayload("A", "A", 0d, 0d),
+                        new CanvasPointPayload("B", "B", 4d, 0d)
+                    ),
+                    null,
+                    null
+                )
+            ))
+        );
+
+        assertEquals(2, chatModel.messages.size());
+        var finalPrompt = ((dev.langchain4j.data.message.UserMessage) chatModel.messages.get(1)).singleText();
+        assertTrue(finalPrompt.contains("继续作AB中点"));
+        assertTrue(finalPrompt.contains("\"endpointRefs\":[\"A\",\"B\"]"));
+        assertTrue(finalPrompt.contains("\"endpoints\""));
+    }
+
+    @Test
+    void shouldPromptLlmWithContinuousConversationInstructions() {
+        var chatModel = new CapturingChatModel("""
+            {"mode":"instructions","responseText":"ok","instructions":[{"action":"midpoint","params":{"p1":"A","p2":"C"},"result_id":"D","label":"D"}]}
+            """);
+        var client = new GeometryLlmClient(chatModel, objectMapper, "test-key", true, "workflow-body");
+
+        client.extractInstructions(
+            "取AC中点D",
+            ContextIndex.from(List.of(
+                new CanvasObjectPayload("A", "point", "A", 0, new Anchor(0, 3), null, null, List.of(), null),
+                new CanvasObjectPayload("C", "point", "C", 2, new Anchor(2, 0), null, null, List.of(), null)
+            ))
+        );
+
+        assertEquals("workflow-body", ((SystemMessage) chatModel.messages.get(0)).text());
+        var finalPrompt = ((dev.langchain4j.data.message.UserMessage) chatModel.messages.get(chatModel.messages.size() - 1)).singleText();
+        assertTrue(finalPrompt.contains("continuous geometry drawing conversation"));
+        assertTrue(finalPrompt.contains("current canvas context"));
+        assertTrue(finalPrompt.contains("only source of truth"));
+        assertTrue(finalPrompt.contains("manually changed the canvas"));
+        assertFalse(finalPrompt.contains("prior chat messages"));
+        assertTrue(finalPrompt.contains("current canvas context"));
+        assertTrue(finalPrompt.contains("取AC中点D"));
+        assertTrue(finalPrompt.contains("\"id\":\"A\""));
+        assertTrue(finalPrompt.contains("\"id\":\"C\""));
     }
 
     private static final class CapturingChatModel implements ChatModel {

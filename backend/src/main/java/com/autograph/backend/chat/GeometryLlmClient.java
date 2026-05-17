@@ -2,6 +2,7 @@ package com.autograph.backend.chat;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.exception.HttpException;
@@ -92,10 +93,11 @@ public class GeometryLlmClient {
         }
 
         try {
-            var response = chatModel.chat(
-                SystemMessage.from(workflow),
-                UserMessage.from(buildUserPrompt(text, context))
-            );
+            List<ChatMessage> messages = new ArrayList<>();
+            messages.add(SystemMessage.from(workflow));
+            messages.add(UserMessage.from(buildUserPrompt(text, context)));
+
+            var response = chatModel.chat(messages);
             var content = response.aiMessage().text();
             if (content == null || content.isBlank()) {
                 LOGGER.warn("Geometry LLM returned empty content");
@@ -149,11 +151,21 @@ public class GeometryLlmClient {
     private String buildUserPrompt(String text, ContextIndex context) throws IOException {
         var contextPayload = context.toLlmSummary();
         return """
+            You are handling one turn in a continuous geometry drawing conversation.
+
+            Decide the next incremental drawing operation from:
+            1. The current user request below.
+            2. The current canvas context JSON below.
+
+            Current canvas context is the only source of truth for what exists now. The user may have manually changed the canvas after earlier AI turns.
+
             User request:
             %s
 
             Current canvas context JSON:
             %s
+
+            Return only the JSON response for this turn.
             """.formatted(text, objectMapper.writeValueAsString(contextPayload));
     }
 

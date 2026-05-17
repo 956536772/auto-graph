@@ -1,15 +1,26 @@
 package com.autograph.backend.chat;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 record ChatRequest(String text, List<CanvasObjectPayload> context) {
+    ChatRequest(String text) {
+        this(text, List.of());
+    }
 }
 
-record ChatResponse(String status, List<DrawingInstruction> instructions, String responseText, Clarification clarification) {
+record ChatResponse(
+    String status,
+    List<DrawingInstruction> instructions,
+    @JsonProperty("responseText") String responseText,
+    Clarification clarification
+) {
     static ChatResponse ok(List<DrawingInstruction> instructions, String responseText) {
         return new ChatResponse("instructions", instructions, responseText, null);
     }
@@ -50,11 +61,34 @@ record CanvasObjectPayload(
     String label,
     Integer order,
     Anchor position,
+    List<Double> coords,
     Anchor center,
     Double radius,
     List<String> endpointLabels,
-    String centerLabel
+    String centerLabel,
+    List<CanvasPointPayload> endpoints,
+    List<CanvasPointPayload> vertices,
+    List<CanvasPointPayload> points
 ) {
+    CanvasObjectPayload(
+        String id,
+        String type,
+        String label,
+        Integer order,
+        Anchor position,
+        Anchor center,
+        Double radius,
+        List<String> endpointLabels,
+        String centerLabel
+    ) {
+        this(id, type, label, order, position, null, center, radius, endpointLabels, centerLabel, null, null, null);
+    }
+}
+
+record CanvasPointPayload(String id, String label, Double x, Double y) {
+    Anchor anchor() {
+        return Anchor.of(x, y);
+    }
 }
 
 record CanvasObject(
@@ -66,20 +100,37 @@ record CanvasObject(
     Anchor center,
     Double radius,
     List<String> endpointLabels,
-    String centerLabel
+    String centerLabel,
+    List<CanvasPointPayload> endpoints,
+    List<CanvasPointPayload> vertices,
+    List<CanvasPointPayload> points
 ) {
     static CanvasObject from(CanvasObjectPayload payload, int fallbackOrder) {
+        var endpoints = payload.endpoints() == null ? List.<CanvasPointPayload>of() : payload.endpoints();
+        var vertices = payload.vertices() == null ? List.<CanvasPointPayload>of() : payload.vertices();
+        var points = payload.points() == null ? List.<CanvasPointPayload>of() : payload.points();
         return new CanvasObject(
             payload.id(),
             payload.type() == null ? "" : payload.type().toLowerCase(),
             payload.label(),
             payload.order() == null ? fallbackOrder : payload.order(),
-            payload.position(),
-            payload.center(),
+            firstNonNull(validAnchor(payload.position()), anchorFromCoords(payload.coords())),
+            validAnchor(payload.center()),
             payload.radius(),
-            payload.endpointLabels() == null ? List.of() : payload.endpointLabels(),
-            payload.centerLabel()
+            endpointLabels(payload.endpointLabels(), endpoints),
+            payload.centerLabel(),
+            endpoints,
+            vertices,
+            points
         );
+    }
+
+    List<String> endpointRefs() {
+        var ids = endpoints.stream()
+            .map(CanvasPointPayload::id)
+            .filter(value -> value != null && !value.isBlank())
+            .toList();
+        return ids.size() == 2 ? ids : endpointLabels;
     }
 
     String describe() {
@@ -104,9 +155,49 @@ record CanvasObject(
     private String optionalLabel() {
         return label == null || label.isBlank() ? "" : " " + label;
     }
+
+    private static Anchor anchorFromCoords(List<Double> coords) {
+        if (coords == null || coords.size() < 2 || coords.get(0) == null || coords.get(1) == null) {
+            return null;
+        }
+        return Anchor.of(coords.get(0), coords.get(1));
+    }
+
+    private static Anchor firstNonNull(Anchor first, Anchor second) {
+        return first != null ? first : second;
+    }
+
+    private static Anchor validAnchor(Anchor anchor) {
+        return anchor != null && anchor.isValid() ? anchor : null;
+    }
+
+    private static List<String> endpointLabels(List<String> explicitLabels, List<CanvasPointPayload> endpoints) {
+        if (explicitLabels != null && !explicitLabels.isEmpty()) {
+            return explicitLabels;
+        }
+        return endpoints.stream()
+            .map(CanvasPointPayload::label)
+            .filter(Objects::nonNull)
+            .filter(value -> !value.isBlank())
+            .toList();
+    }
 }
 
-record Anchor(double x, double y) {
+record Anchor(Double x, Double y) {
+    Anchor(double x, double y) {
+        this(Double.valueOf(x), Double.valueOf(y));
+    }
+
+    static Anchor of(Double x, Double y) {
+        if (x == null || y == null || !Double.isFinite(x) || !Double.isFinite(y)) {
+            return null;
+        }
+        return new Anchor(x, y);
+    }
+
+    boolean isValid() {
+        return x != null && y != null && Double.isFinite(x) && Double.isFinite(y);
+    }
 }
 
 record GeometryAiResponse(String mode, String responseText, List<DrawingInstruction> instructions, Clarification clarification) {

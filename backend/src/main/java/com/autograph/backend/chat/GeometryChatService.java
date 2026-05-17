@@ -1,5 +1,7 @@
 package com.autograph.backend.chat;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -11,6 +13,7 @@ import java.util.stream.Collectors;
 
 @Service
 public class GeometryChatService {
+    private static final Logger LOGGER = LoggerFactory.getLogger(GeometryChatService.class);
 
     static final Set<String> POINT_TYPES = Set.of("point", "glider");
     static final Set<String> LINE_TYPES = Set.of("segment", "line", "parallel", "perpendicular", "tangent", "functiongraph");
@@ -24,7 +27,8 @@ public class GeometryChatService {
     }
 
     public ChatResponse handle(ChatRequest request) {
-        var normalizedText = normalize(request.text());
+        var rawText = request.text();
+        var normalizedText = normalize(rawText);
         var canvasContext = request.context() == null ? List.<CanvasObjectPayload>of() : request.context();
         var directResponse = directResponseFor(normalizedText, canvasContext);
         if (directResponse != null) {
@@ -35,25 +39,27 @@ public class GeometryChatService {
         if (normalizedText.isBlank()) {
             return ChatResponse.error("目前支持三角形、正方形、连接线段、中点、平行/垂线、圆、外接圆、内切圆、过圆上一点作切线、两圆交点这些指令。");
         }
-        var result = llmClient.extractInstructions(normalizedText, context);
+        var result = llmClient.extractInstructions(rawText, context);
         if (result.status() != LlmDirectStatus.SUCCESS) {
             return ChatResponse.error(aiUnavailableMessage(result.reason()));
         }
         var aiResponse = result.response();
         return switch (aiResponse.mode()) {
-            case "instructions" -> instructionsResponse(aiResponse, canvasContext);
+            case "instructions" -> instructionsResponse(aiResponse, canvasContext, rawText);
             case "clarification" -> ChatResponse.clarification(aiResponse.clarification());
             case "error" -> ChatResponse.error(aiResponse.responseText());
             default -> ChatResponse.error("AI 无法使用：AI 响应格式错误。");
         };
     }
 
-    private ChatResponse instructionsResponse(GeometryAiResponse aiResponse, List<CanvasObjectPayload> context) {
+    private ChatResponse instructionsResponse(GeometryAiResponse aiResponse, List<CanvasObjectPayload> context, String rawText) {
         var instructions = aiResponse.instructions() == null ? List.<DrawingInstruction>of() : aiResponse.instructions();
         if (instructions.isEmpty()) {
             return ChatResponse.error("这次没有生成可执行的绘图指令。");
         }
-        var expansion = GeometryInstructionExpander.expand(instructions, context);
+        var resolvedInstructions = GeometryReferenceResolver.resolve(instructions, context);
+        var normalizedInstructions = GeometryInstructionNormalizer.normalize(resolvedInstructions, rawText);
+        var expansion = GeometryInstructionExpander.expand(normalizedInstructions, context);
         if (!expansion.valid()) {
             if (expansion.clarification() != null) {
                 return ChatResponse.clarification(expansion.clarification());
@@ -63,8 +69,10 @@ public class GeometryChatService {
         var expandedInstructions = expansion.instructions();
         var validation = GeometryCapabilityContract.validateInstructions(expandedInstructions, context);
         if (validation.valid()) {
+            LOGGER.info("Successfully processed {} instructions for request: {}", expandedInstructions.size(), rawText);
             return ChatResponse.ok(expandedInstructions, responseTextWithExpansionNotes(aiResponse.responseText(), expansion.notes()));
         }
+        LOGGER.warn("Instruction validation failed for request: {}. Reason: {}", rawText, validation.reason());
         if (validation.clarification() != null) {
             return ChatResponse.clarification(validation.clarification());
         }
@@ -88,7 +96,7 @@ public class GeometryChatService {
             new DrawingInstruction("place_point", Map.of("x", -2, "y", 1), firstId, "A"),
             new DrawingInstruction("place_point", Map.of("x", 2, "y", 1), secondId, "B"),
             new DrawingInstruction("segment", Map.of("p1", firstId, "p2", secondId), segmentId, null)
-        ), "已绘制线段 AB。"), context);
+        ), "已绘制线段 AB。"), context, normalizedText);
     }
 
     private String nextAvailableId(String base, Set<String> usedIds) {
@@ -130,7 +138,7 @@ public class GeometryChatService {
     }
 
     private String responseTextWithExpansionNotes(String responseText, List<String> notes) {
-        var baseText = responseText == null || responseText.isBlank() ? "已生成绘图指令。" : responseText;
+        var baseText = responseText == null || responseText.isBlank() ? "已根据你的描述执行了绘图操作。" : responseText;
         var uniqueNotes = notes == null ? List.<String>of() : notes.stream()
             .filter(note -> note != null && !note.isBlank())
             .distinct()
@@ -138,7 +146,7 @@ public class GeometryChatService {
         if (uniqueNotes.isEmpty()) {
             return baseText;
         }
-        return baseText + " " + String.join(" ", uniqueNotes);
+        return baseText + (baseText.endsWith("。") ? " " : "。 ") + String.join(" ", uniqueNotes);
     }
 
     private String normalize(String text) {

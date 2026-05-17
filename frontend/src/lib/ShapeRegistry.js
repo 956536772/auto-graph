@@ -417,7 +417,10 @@ export class ShapeRegistry {
     }
     pointCoords(point) {
         if (!point || typeof point.X !== 'function' || typeof point.Y !== 'function') return null;
-        return { x: point.X(), y: point.Y() };
+        return this.finitePoint(point.X(), point.Y());
+    }
+    finitePoint(x, y) {
+        return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
     }
     hasEndpoints(obj) {
         return Boolean(obj && obj.point1 && obj.point2);
@@ -425,10 +428,10 @@ export class ShapeRegistry {
     getAnchor(obj) {
         if (!obj) return null;
         if (typeof obj.X === 'function' && typeof obj.Y === 'function') {
-            return { x: obj.X(), y: obj.Y() };
+            return this.finitePoint(obj.X(), obj.Y());
         }
         if (obj.center && typeof obj.center.X === 'function' && typeof obj.center.Y === 'function') {
-            return { x: obj.center.X(), y: obj.center.Y() };
+            return this.finitePoint(obj.center.X(), obj.center.Y());
         }
         if (this.hasEndpoints(obj)) {
             const first = this.pointCoords(obj.point1);
@@ -442,11 +445,15 @@ export class ShapeRegistry {
         if (obj.elType === 'polygon' && Array.isArray(obj.vertices) && obj.vertices.length > 0) {
             const vertices = obj.vertices.filter(point => point && typeof point.X === 'function' && typeof point.Y === 'function');
             if (vertices.length === 0) return null;
-            const total = vertices.reduce((acc, point) => ({
-                x: acc.x + point.X(),
-                y: acc.y + point.Y()
+            const finiteVertices = vertices
+                .map(point => this.finitePoint(point.X(), point.Y()))
+                .filter(Boolean);
+            if (finiteVertices.length === 0) return null;
+            const total = finiteVertices.reduce((acc, point) => ({
+                x: acc.x + point.x,
+                y: acc.y + point.y
             }), { x: 0, y: 0 });
-            return { x: total.x / vertices.length, y: total.y / vertices.length };
+            return { x: total.x / finiteVertices.length, y: total.y / finiteVertices.length };
         }
         return null;
     }

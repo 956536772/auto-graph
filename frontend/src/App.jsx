@@ -6,6 +6,7 @@ import { ManualDrawingController } from './lib/manualTools/ManualDrawingControll
 import { TOOLS } from './lib/manualTools/constants.js';
 import { ensurePointLabelEditor, getNextPointLabel } from './lib/manualTools/labels.js';
 import { exportBoardPreviewSvg, svgToObjectUrl } from './lib/previewExport.js';
+import { buildChatRequestPayload, INITIAL_AI_MESSAGE } from './lib/chatPayload.js';
 import './App.css';
 
 const INITIAL_BOUNDING_BOX = [-10, 10, 10, -10];
@@ -79,6 +80,8 @@ const PROMPT_SUGGESTIONS = [
   '画出 y = x^2 的图像',
   '过圆上一点作切线'
 ];
+
+const initialMessages = () => [{ ...INITIAL_AI_MESSAGE }];
 
 const PreviewModal = ({ data, board, onClose }) => {
   const [svgUrl, setSvgUrl] = useState(null);
@@ -231,8 +234,8 @@ export default function App() {
   const controllerRef = useRef(null);
   const chatMessagesRef = useRef(null);
   const [activeTool, setActiveTool] = useState(TOOLS.SELECT);
-  const [status, setStatus] = useState('就绪 - 请在右侧输入绘图需求（左键选择，右键对象打开删除菜单）');
-  const [messages, setMessages] = useState([{ role: 'ai', text: '你好！我是你的几何助手。你可以让我画三角形、作外接圆/内切圆、过圆上一点作切线，或求两圆交点。' }]);
+  const [status, setStatus] = useState('就绪 - 请在右侧输入绘图需求');
+  const [messages, setMessages] = useState(initialMessages);
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [previewData, setPreviewData] = useState(null);
@@ -317,7 +320,17 @@ export default function App() {
   const handleToolClick = (tool) => {
     if (tool === TOOLS.CLEAR) {
       if (window.confirm('确定要清空当前画布并重置对话吗？')) {
-        window.location.reload();
+        const board = engineRef.current?.board;
+        registryRef.current.removeCurrentObjects(board);
+        registryRef.current.clear();
+        controllerRef.current?.resetState({ discardPendingGroups: true });
+        setMessages(initialMessages());
+        setInputText('');
+        setPreviewData(null);
+        setActiveTool(TOOLS.SELECT);
+        board?.setBoundingBox(INITIAL_BOUNDING_BOX, true);
+        board?.update();
+        setStatus('已清空画布并重置对话');
       }
       return;
     }
@@ -377,14 +390,13 @@ export default function App() {
     setStatus('AI 正在分析题意并绘图...');
 
     try {
-      const context = registryRef.current.serialize();
       const response = await fetch('http://localhost:8080/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: JSON.stringify(buildChatRequestPayload({
           text,
-          context
-        })
+          registry: registryRef.current
+        }))
       });
       const data = await response.json();
 
@@ -392,7 +404,19 @@ export default function App() {
         engineRef.current.execute(data.instructions);
       }
 
-      setMessages((prev) => [...prev, { role: 'ai', text: data.responseText || '已处理。' }]);
+      let aiText = data.responseText;
+      if (!aiText) {
+        if (data.status === 'instructions') {
+          aiText = '已根据你的描述执行了绘图操作。';
+        } else if (data.status === 'clarification') {
+          aiText = data.clarification?.question || '我需要你进一步明确绘图意图。';
+        } else if (data.status === 'error') {
+          aiText = '抱歉，绘图请求处理失败，请尝试调整描述。';
+        } else {
+          aiText = '抱歉，我暂时无法处理这个请求。';
+        }
+      }
+      setMessages((prev) => [...prev, { role: 'ai', text: aiText }]);
       if (data.status === 'clarification') {
         setStatus('需要澄清 - 请补充说明后再发送');
       } else if (data.status === 'error') {

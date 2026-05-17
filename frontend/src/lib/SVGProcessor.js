@@ -8,7 +8,7 @@ export class SVGProcessor {
     }
   }
 
-  processForExam({ xmin, xmax, ymin, ymax, board, pointIds = [], pointLabels = [] }) {
+  processForExam({ xmin, xmax, ymin, ymax, board, pointIds = [], circleCenterIds = [], pointLabels = [] }) {
     if (!Number.isFinite(xmin) || !Number.isFinite(xmax) || !Number.isFinite(ymin) || !Number.isFinite(ymax)) {
       throw new Error('预览选区坐标无效');
     }
@@ -32,7 +32,6 @@ export class SVGProcessor {
       '.JXGinfobox',
       '.jxgbox_navigationbutton',
       '.jxgbox_copyright',
-      '.JXGpoint',
       'foreignObject',
       'rect[class*="background"]'
     ];
@@ -52,14 +51,25 @@ export class SVGProcessor {
         return;
       }
 
-      // Remove points by matching collected point IDs
+      // Handle points
       // JSXGraph SVG IDs are usually boardID_elementID
-      const isPoint = pointIds.some(pid => id === pid || id.endsWith('_' + pid));
-      if (isPoint) {
-        // Double check: points are usually small circles or paths.
-        // We only remove if it's not a text element (which might have the same ID/suffix)
+      const pidMatch = pointIds.find(pid => id === pid || id.endsWith('_' + pid));
+      if (pidMatch) {
         if (el.tagName.toLowerCase() !== 'text') {
-          el.remove();
+          // If it's a circle center, keep it and style it as a solid dot
+          const isCircleCenter = circleCenterIds.includes(pidMatch);
+          if (isCircleCenter) {
+            el.setAttribute('fill', 'black');
+            el.setAttribute('stroke', 'black');
+            el.setAttribute('stroke-width', '0');
+            // Ensure it's small enough for a "dot" look
+            if (el.tagName.toLowerCase() === 'circle') {
+              el.setAttribute('r', '2');
+            }
+          } else {
+            // Remove other points
+            el.remove();
+          }
           return;
         }
       }
@@ -75,13 +85,17 @@ export class SVGProcessor {
     const allElements = this.svg.querySelectorAll('path, circle, line, polygon, ellipse, text');
     allElements.forEach(el => {
       const tagName = el.tagName.toLowerCase();
+      const id = el.getAttribute('id') || '';
+      const isCircleCenter = circleCenterIds.some(pid => id === pid || id.endsWith('_' + pid));
+
       if (tagName === 'text') {
         el.setAttribute('fill', 'black');
         el.setAttribute('stroke', 'none');
         el.style.fontFamily = '"Times New Roman", Times, serif';
         el.style.fontSize = (parseFloat(el.style.fontSize) || 12) + 'px';
         el.style.fontWeight = 'bold';
-      } else {
+      } else if (!isCircleCenter) {
+        // Skip restyling if it's a circle center (already styled above)
         const currentStroke = el.getAttribute('stroke');
         if (currentStroke && currentStroke !== 'none') {
           el.setAttribute('stroke', 'black');

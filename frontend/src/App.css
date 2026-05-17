@@ -56,62 +56,71 @@ html {
 #toolbar {
   top: 88px;
   left: 20px;
-  width: 156px;
-  max-height: calc(100vh - 118px);
+  width: 160px;
   padding: 12px;
-  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.4);
 }
 
 .tool-group + .tool-group {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid rgba(16, 32, 51, 0.08);
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(16, 32, 51, 0.06);
 }
 
 .tool-group-label {
   margin: 0 0 8px 4px;
   color: var(--canvas-muted);
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 10px;
+  font-weight: 800;
   letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.5;
 }
 
 .tool-grid {
   display: grid;
-  grid-template-columns: repeat(3, 44px);
-  gap: 8px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
 }
 
 .tool-btn {
   display: flex;
-  width: 44px;
-  height: 44px;
+  aspect-ratio: 1;
+  width: 100%;
+  max-width: 42px;
+  margin: 0 auto;
   align-items: center;
   justify-content: center;
-  border: 1px solid transparent;
-  border-radius: 14px;
+  border: 1px solid rgba(16, 32, 51, 0.03);
+  border-radius: 12px;
   color: #294156;
-  background: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.6);
   cursor: pointer;
-  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease;
+  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .tool-btn:hover {
   color: var(--brand-strong);
-  border-color: rgba(15, 124, 128, 0.24);
+  border-color: rgba(15, 124, 128, 0.2);
   background: #fff;
-  transform: translateY(-1px);
+  transform: scale(1.1);
+  box-shadow: 0 4px 12px rgba(16, 32, 51, 0.06);
+  z-index: 2;
+}
+
+.tool-btn:active {
+  transform: scale(0.96);
 }
 
 .tool-btn.active {
   color: #fff;
-  border-color: rgba(7, 92, 97, 0.18);
+  border-color: transparent;
   background: linear-gradient(135deg, var(--brand), var(--brand-strong));
-  box-shadow: 0 12px 24px rgba(15, 124, 128, 0.25);
+  box-shadow: 0 4px 12px rgba(15, 124, 128, 0.2);
 }
 
 .tool-glyph {
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 800;
   line-height: 1;
 }
@@ -123,73 +132,83 @@ html {
   max-width: min(540px, calc(100vw - 420px));
   align-items: center;
   gap: 10px;
-  padding: 10px 14px;
+  padding: 8px 14px;
   color: var(--canvas-muted);
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 600;
   line-height: 1.35;
+  border: 1px solid rgba(255, 255, 255, 0.4);
 }
 
 .status-dot {
-  width: 9px;
-  height: 9px;
+  width: 7px;
+  height: 7px;
   flex: 0 0 auto;
   border-radius: 50%;
   background: var(--brand);
-  box-shadow: 0 0 0 5px var(--brand-soft);
+  box-shadow: 0 0 0 4px var(--brand-soft);
 }
 
 #status-bar.warning .status-dot {
   background: var(--warning);
-  box-shadow: 0 0 0 5px rgba(183, 121, 31, 0.14);
+  box-shadow: 0 0 0 4px rgba(183, 121, 31, 0.14);
 }
 
 #status-bar.danger .status-dot {
   background: var(--danger);
-  box-shadow: 0 0 0 5px rgba(196, 62, 53, 0.14);
+  box-shadow: 0 0 0 4px rgba(196, 62, 53, 0.14);
 }
 
 #tool-hint {
   left: 20px;
   bottom: 20px;
-  width: 240px;
+  width: 160px;
   padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
 }
 
 .eyebrow {
   color: var(--warm);
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.8;
 }
 
 #tool-hint strong {
   display: block;
   margin-top: 4px;
-  font-size: 20px;
-  letter-spacing: -0.02em;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--canvas-ink);
 }
 
 #tool-hint p {
-  margin: 8px 0 12px;
+  margin: 6px 0 12px;
   color: var(--canvas-muted);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
   text-align: left;
 }
 
 .shortcut-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .shortcut-row span {
-  padding: 5px 8px;
-  border-radius: 999px;
-  color: #24414c;
-  background: rgba(15, 124, 128, 0.1);
-  font-size: 12px;
-  font-weight: 700;
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 8px;
+  color: var(--brand-strong);
+  background: var(--brand-soft);
+  font-size: 10px;
+  font-weight: 800;
+  border: 1px solid rgba(15, 124, 128, 0.05);
 }
 
 #view-controls {
@@ -303,7 +322,6 @@ html {
 #prompt-suggestions button:hover {
   background: #fff;
 }
-
 #chat-input-area {
   display: flex;
   gap: 8px;
@@ -373,7 +391,7 @@ html {
 
 #top-actions {
   top: 20px;
-  left: 50%;
+  left: calc(50% - 72px); /* Shift left to center between toolbar (left) and chat (right) */
   transform: translateX(-50%);
   display: flex;
   padding: 6px;
@@ -501,7 +519,7 @@ html {
 
 .preview-footer button {
   padding: 10px 18px;
-  border: 1px solid rgba(16, 32, 51, 0.14);
+  border: solid rgba(16, 32, 51, 0.14);
   border-radius: 12px;
   background: white;
   color: var(--canvas-ink);
