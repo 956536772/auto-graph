@@ -315,3 +315,34 @@ Reverted the toolbar and tool hint to the 160px compact version as requested, re
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: Center Preview Button in Main Canvas
+
+**Date**: 2026-05-17
+**Task**: Center Preview Button in Main Canvas
+**Branch**: `main`
+
+### Summary
+
+Adjusted the horizontal position of the 'Preview and Export' button. By shifting it left from the absolute screen center, it now appears centered within the actual drawing area (between the left toolbar and the right chat panel), resolving the visual offset caused by the sidebar.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
