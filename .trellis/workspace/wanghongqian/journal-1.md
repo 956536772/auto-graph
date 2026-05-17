@@ -346,3 +346,34 @@ Adjusted the horizontal position of the 'Preview and Export' button. By shifting
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: Shorten Status Message
+
+**Date**: 2026-05-17
+**Task**: Shorten Status Message
+**Branch**: `main`
+
+### Summary
+
+Simplified the initial status message in the status bar by removing the parenthetical instructions, making the UI look cleaner as requested.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
