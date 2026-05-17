@@ -222,3 +222,34 @@ Reverted the toolbar and tool hint to a narrow, elegant width of 160px and remov
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: Fix Toolbar Background Containment
+
+**Date**: 2026-05-17
+**Task**: Fix Toolbar Background Containment
+**Branch**: `main`
+
+### Summary
+
+Removed the max-height restriction on the toolbar to ensure its background panel fully contains all tool groups, including the History buttons. This fixes the issue where buttons were spilling out of the designed container.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
