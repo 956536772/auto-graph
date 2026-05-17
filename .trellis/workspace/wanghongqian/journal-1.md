@@ -160,3 +160,34 @@ Refined the toolbar layout to prevent obscuring content. Key fixes include addin
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Final Width Expansion and Overlap Fix
+
+**Date**: 2026-05-17
+**Task**: Final Width Expansion and Overlap Fix
+**Branch**: `main`
+
+### Summary
+
+Increased the toolbar and tool hint width to 280px to accommodate larger icons and clearer layout. Adjusted the toolbar max-height to ensure it never overlaps with the tool hint, completely unblocking the History section.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
