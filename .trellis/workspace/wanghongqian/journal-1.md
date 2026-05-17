@@ -36,3 +36,34 @@ Added a black-and-white exam-style preview and export feature. Includes a top-of
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: Align Toolbar and Tool Hint Width
+
+**Date**: 2026-05-17
+**Task**: Align Toolbar and Tool Hint Width
+**Branch**: `main`
+
+### Summary
+
+Set the width of both the toolbar and the tool hint to 180px and unified their padding to 16px to ensure they align perfectly in the desktop view.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
