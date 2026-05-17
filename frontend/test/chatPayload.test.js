@@ -31,3 +31,21 @@ test('buildChatRequestPayload sends empty context after clear', () => {
   assert.deepEqual(payload.context, []);
   assert.equal(Object.hasOwn(payload, 'history'), false);
 });
+
+test('buildChatRequestPayload includes optional image payload', () => {
+  const payload = buildChatRequestPayload({
+    text: '根据图片画图',
+    registry: { serialize: () => [] },
+    image: {
+      mediaType: 'image/png',
+      data: 'abc123',
+      name: 'diagram.png'
+    }
+  });
+
+  assert.deepEqual(payload.image, {
+    mediaType: 'image/png',
+    data: 'abc123',
+    name: 'diagram.png'
+  });
+});

@@ -3,7 +3,7 @@ import { Buffer } from 'node:buffer';
 import test from 'node:test';
 
 import { ShapeRegistry } from '../src/lib/ShapeRegistry.js';
-import { collectPointLabelOverlays, exportBoardPreviewSvg } from '../src/lib/previewExport.js';
+import { collectPointLabelOverlays, collectVisibleCircleCenterIds, exportBoardPreviewSvg } from '../src/lib/previewExport.js';
 import { TOOLS } from '../src/lib/manualTools/constants.js';
 import {
   buildCircleDefinition,
@@ -12,7 +12,14 @@ import {
   buildRectangleVertices,
   getToolSwitchStatus
 } from '../src/lib/manualTools/geometry.js';
-import { chooseTargetFromElements, preferPointSnapTarget } from '../src/lib/manualTools/selection.js';
+import {
+  chooseTargetFromElements,
+  getCircleSnapDistancePx,
+  isWithinSnapRadius,
+  PATH_SNAP_RADIUS_PX,
+  preferPointSnapTarget,
+  shouldUseSnapping
+} from '../src/lib/manualTools/selection.js';
 
 class FakeSvgElement {
   constructor(tagName, textContent = '') {
@@ -321,6 +328,173 @@ test('ShapeRegistry removes dependent geometry when deleting a point', () => {
   assert.equal(registry.exists('POLY'), false);
 });
 
+test('ShapeRegistry deletes AI polygons without removing shared circumcircle geometry', () => {
+  const registry = new ShapeRegistry();
+  const removed = [];
+  const board = {
+    removeObject(object) {
+      removed.push(object.registryId);
+    }
+  };
+  const pointA = createObject('A');
+  const pointB = createObject('B');
+  const pointC = createObject('C');
+  const polygon = { elType: 'polygon', vertices: [pointA, pointB, pointC] };
+  const circumcircle = {
+    elType: 'circumcircle',
+    point1: pointA,
+    point2: pointB,
+    point3: pointC
+  };
+
+  registry.register('A', pointA);
+  registry.register('B', pointB);
+  registry.register('C', pointC);
+  registry.register('TRIANGLE', polygon);
+  registry.register('CIRCUMCIRCLE', circumcircle);
+
+  assert.equal(registry.removeObject(board, polygon), 'TRIANGLE');
+  assert.deepEqual(removed, ['TRIANGLE']);
+  assert.equal(registry.exists('A'), true);
+  assert.equal(registry.exists('B'), true);
+  assert.equal(registry.exists('C'), true);
+  assert.equal(registry.exists('CIRCUMCIRCLE'), true);
+});
+
+test('ShapeRegistry preserves a derived circumcircle as an independent circle when deleting one parent point', () => {
+  const registry = new ShapeRegistry();
+  const removed = [];
+  const board = {
+    removeObject(object) {
+      removed.push(object.registryId);
+    }
+  };
+  registry.setSnapshotFactory((entry) => ({
+    elType: entry.type,
+    meta: entry.meta,
+    center: entry.center ? { X: () => entry.center.x, Y: () => entry.center.y } : null,
+    radiuspoint: entry.center && entry.radius ? { X: () => entry.center.x + entry.radius, Y: () => entry.center.y } : null,
+    Radius: () => entry.radius || 0,
+    getName: () => entry.label || ''
+  }));
+  const pointA = createObject('A');
+  const pointB = createObject('B');
+  const pointC = createObject('C');
+  const polygon = { elType: 'polygon', vertices: [pointA, pointB, pointC] };
+  const centerPoint = {
+    elType: 'point',
+    X: () => 1,
+    Y: () => 2,
+    getName: () => 'O',
+    parents: [pointA, pointB, pointC],
+    meta: {
+      generatedCircleCenterFor: 'CIRCUMCIRCLE'
+    }
+  };
+  const circumcircle = {
+    elType: 'circumcircle',
+    point1: pointA,
+    point2: pointB,
+    point3: pointC,
+    center: { X: () => 1, Y: () => 2 },
+    Radius: () => 5,
+    meta: {
+      historyAction: 'circumcircle',
+      historyParentIds: ['A', 'B', 'C'],
+      centerPointId: 'CIRCUMCIRCLE_center'
+    }
+  };
+
+  registry.register('A', pointA);
+  registry.register('B', pointB);
+  registry.register('C', pointC);
+  registry.register('TRIANGLE', polygon);
+  registry.register('CIRCUMCIRCLE_center', centerPoint);
+  registry.register('CIRCUMCIRCLE', circumcircle);
+
+  assert.equal(registry.removeObject(board, pointC), 'C');
+  assert.equal(registry.exists('C'), false);
+  assert.equal(registry.exists('TRIANGLE'), false);
+  assert.equal(registry.exists('CIRCUMCIRCLE'), true);
+  assert.equal(registry.exists('CIRCUMCIRCLE_center'), true);
+  assert.equal(registry.get('CIRCUMCIRCLE').elType, 'circle');
+  assert.deepEqual(new Set(removed), new Set(['C', 'TRIANGLE', 'CIRCUMCIRCLE', 'CIRCUMCIRCLE_center']));
+
+  assert.equal(registry.undo(board), 'C');
+  assert.equal(registry.exists('C'), true);
+  assert.equal(registry.get('CIRCUMCIRCLE').elType, 'circumcircle');
+  assert.equal(registry.exists('CIRCUMCIRCLE_center'), true);
+
+  assert.equal(registry.redo(board), 'C');
+  assert.equal(registry.exists('C'), false);
+  assert.equal(registry.get('CIRCUMCIRCLE').elType, 'circle');
+  assert.equal(registry.exists('CIRCUMCIRCLE_center'), true);
+});
+
+test('ShapeRegistry deletes generated circle centers without deleting the circle', () => {
+  const registry = new ShapeRegistry();
+  const removed = [];
+  const board = {
+    removeObject(object) {
+      removed.push(object.registryId);
+    }
+  };
+  const center = {
+    elType: 'point',
+    meta: {
+      generatedCircleCenterFor: 'CIRCLE'
+    }
+  };
+  const circle = {
+    elType: 'circle',
+    center,
+    meta: {
+      centerPointId: 'CIRCLE_center'
+    }
+  };
+
+  registry.register('CIRCLE_center', center);
+  registry.register('CIRCLE', circle);
+
+  assert.equal(registry.removeObject(board, center), 'CIRCLE_center');
+  assert.deepEqual(removed, ['CIRCLE_center']);
+  assert.equal(registry.exists('CIRCLE'), true);
+  assert.equal(registry.exists('CIRCLE_center'), false);
+});
+
+test('ShapeRegistry keeps compound deletion for manual closed polygons', () => {
+  const registry = new ShapeRegistry();
+  const removed = [];
+  const board = {
+    removeObject(object) {
+      removed.push(object.registryId);
+    }
+  };
+  const pointA = createObject('A');
+  const pointB = createObject('B');
+  const pointC = createObject('C');
+  const segmentAB = { point1: pointA, point2: pointB };
+  const segmentBC = { point1: pointB, point2: pointC };
+  const segmentCA = { point1: pointC, point2: pointA };
+  const polygon = {
+    elType: 'polygon',
+    vertices: [pointA, pointB, pointC],
+    meta: { closedSegmentIds: ['AB', 'BC', 'CA'] }
+  };
+
+  registry.register('A', pointA);
+  registry.register('B', pointB);
+  registry.register('C', pointC);
+  registry.register('AB', segmentAB);
+  registry.register('BC', segmentBC);
+  registry.register('CA', segmentCA);
+  registry.register('TRIANGLE', polygon);
+
+  assert.equal(registry.removeObject(board, polygon), 'TRIANGLE');
+  assert.deepEqual(new Set(removed), new Set(['A', 'B', 'C', 'AB', 'BC', 'CA', 'TRIANGLE']));
+  assert.deepEqual(registry.history, []);
+});
+
 test('ShapeRegistry removes closed polygon affordance when deleting one of its edges', () => {
   const registry = new ShapeRegistry();
   const removed = [];
@@ -466,6 +640,48 @@ test('preferPointSnapTarget keeps points ahead of path hits', () => {
   assert.equal(target.obj, point);
 });
 
+test('getCircleSnapDistancePx measures distance to circumference instead of circle interior', () => {
+  const circle = {
+    elType: 'circle',
+    center: {
+      X: () => 0,
+      Y: () => 0
+    },
+    Radius: () => 5
+  };
+  const toScreenCoords = (coords) => ({ x: coords.x * 10, y: coords.y * 10 });
+
+  assert.equal(getCircleSnapDistancePx(circle, { x: 0, y: 0 }, toScreenCoords), 50);
+  assert.equal(getCircleSnapDistancePx(circle, { x: 5, y: 0 }, toScreenCoords), 0);
+  assert.equal(getCircleSnapDistancePx(circle, { x: 5.8, y: 0 }, toScreenCoords), 8);
+});
+
+test('shouldUseSnapping disables all snapping while Shift is held', () => {
+  assert.equal(shouldUseSnapping({ shiftKey: false }), true);
+  assert.equal(shouldUseSnapping({ shiftKey: true }), false);
+});
+
+test('isWithinSnapRadius keeps path snapping strict', () => {
+  assert.equal(isWithinSnapRadius(6, 6), true);
+  assert.equal(isWithinSnapRadius(6.1, 6), false);
+  assert.equal(isWithinSnapRadius(Number.POSITIVE_INFINITY, 6), false);
+});
+
+test('circle interior hits stay outside path snap radius so inner dragging can remain enabled', () => {
+  const circle = {
+    elType: 'circle',
+    center: {
+      X: () => 0,
+      Y: () => 0
+    },
+    Radius: () => 5
+  };
+  const toScreenCoords = (coords) => ({ x: coords.x * 10, y: coords.y * 10 });
+  const interiorDistance = getCircleSnapDistancePx(circle, { x: 0, y: 0 }, toScreenCoords);
+
+  assert.equal(isWithinSnapRadius(interiorDistance, PATH_SNAP_RADIUS_PX), false);
+});
+
 test('collectPointLabelOverlays captures visible point labels for preview export', () => {
   const board = {
     objects: {
@@ -513,6 +729,55 @@ test('collectPointLabelOverlays captures visible point labels for preview export
     { text: 'A', x: 120, y: 80, anchorX: 1, anchorY: 2, fontSize: 18 },
     { text: 'C', x: 50, y: 40, anchorX: 5, anchorY: 6, fontSize: 16 }
   ]);
+});
+
+test('collectVisibleCircleCenterIds only keeps centers with visible label text for preview dots', () => {
+  const labeledCenter = {
+    id: 'center_labeled',
+    elType: 'point',
+    hasLabel: true,
+    visPropCalc: { visible: true },
+    getName: () => 'O',
+    label: { visPropCalc: { visible: true } }
+  };
+  const unlabeledCenter = {
+    id: 'center_unlabeled',
+    elType: 'point',
+    hasLabel: false,
+    visPropCalc: { visible: true },
+    getName: () => '',
+    label: { visPropCalc: { visible: true } }
+  };
+  const hiddenLabelCenter = {
+    id: 'center_hidden_label',
+    elType: 'point',
+    hasLabel: true,
+    visPropCalc: { visible: true },
+    getName: () => 'P',
+    label: { visPropCalc: { visible: false } }
+  };
+  const ordinaryPoint = {
+    id: 'ordinary_point',
+    elType: 'point',
+    hasLabel: true,
+    visPropCalc: { visible: true },
+    getName: () => 'A',
+    label: { visPropCalc: { visible: true } }
+  };
+
+  const board = {
+    objects: {
+      labeledCenter,
+      unlabeledCenter,
+      hiddenLabelCenter,
+      ordinaryPoint,
+      circleA: { elType: 'circle', center: labeledCenter },
+      circleB: { elType: 'circle', center: unlabeledCenter },
+      circleC: { elType: 'circle', center: hiddenLabelCenter }
+    }
+  };
+
+  assert.deepEqual(collectVisibleCircleCenterIds(board), ['center_labeled']);
 });
 
 test('exportBoardPreviewSvg restores board text display after successful export', () => {

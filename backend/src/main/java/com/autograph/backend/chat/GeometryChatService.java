@@ -30,7 +30,8 @@ public class GeometryChatService {
         var rawText = request.text();
         var normalizedText = normalize(rawText);
         var canvasContext = request.context() == null ? List.<CanvasObjectPayload>of() : request.context();
-        var directResponse = directResponseFor(normalizedText, canvasContext);
+        var image = request.image();
+        var directResponse = image == null ? directResponseFor(normalizedText, canvasContext) : null;
         if (directResponse != null) {
             return directResponse;
         }
@@ -39,7 +40,7 @@ public class GeometryChatService {
         if (normalizedText.isBlank()) {
             return ChatResponse.error("目前支持三角形、正方形、连接线段、中点、平行/垂线、圆、外接圆、内切圆、过圆上一点作切线、两圆交点这些指令。");
         }
-        var result = llmClient.extractInstructions(rawText, context);
+        var result = llmClient.extractInstructions(rawText, context, image);
         if (result.status() != LlmDirectStatus.SUCCESS) {
             return ChatResponse.error(aiUnavailableMessage(result.reason()));
         }

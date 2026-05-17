@@ -9,10 +9,17 @@ import java.util.Map;
 import java.util.Objects;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
-record ChatRequest(String text, List<CanvasObjectPayload> context) {
+record ChatRequest(String text, List<CanvasObjectPayload> context, ChatImagePayload image) {
     ChatRequest(String text) {
-        this(text, List.of());
+        this(text, List.of(), null);
     }
+
+    ChatRequest(String text, List<CanvasObjectPayload> context) {
+        this(text, context, null);
+    }
+}
+
+record ChatImagePayload(String mediaType, String data, String name) {
 }
 
 record ChatResponse(

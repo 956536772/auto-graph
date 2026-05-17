@@ -62,6 +62,26 @@ function readLabelScreenPosition(element) {
   return { x: pointPosition.x + 10, y: pointPosition.y - 10 };
 }
 
+function hasVisibleLabelText(element) {
+  return isVisible(element?.label) && Boolean(readElementLabel(element).trim());
+}
+
+export function collectVisibleCircleCenterIds(board) {
+  if (!board?.objects) {
+    return [];
+  }
+
+  const objects = Object.values(board.objects);
+  return objects
+    .filter((obj) => (
+      (obj?.elType === 'point' || obj?.elType === 'glider') &&
+      obj.id &&
+      hasVisibleLabelText(obj) &&
+      objects.some((candidate) => candidate?.elType === 'circle' && candidate.center === obj)
+    ))
+    .map((obj) => obj.id);
+}
+
 export function collectPointLabelOverlays(board) {
   if (!board?.objects) {
     return [];
@@ -108,19 +128,11 @@ export function exportBoardPreviewSvg({ board, selection }) {
     // Pass true to ignoreTexts to prevent foreignObject tags which taint the canvas
     // Collect all point IDs to remove them in the processor
     const pointIds = [];
-    const circleCenterIds = [];
+    const circleCenterIds = collectVisibleCircleCenterIds(board);
     for (const id in board.objects) {
       const obj = board.objects[id];
       if (obj.elType === 'point' || obj.elType === 'glider') {
         pointIds.push(obj.id);
-        
-        // Check if this point is a center of a circle
-        const isCenter = Object.values(board.objects).some(o => 
-          o.elType === 'circle' && o.center === obj
-        );
-        if (isCenter) {
-          circleCenterIds.push(obj.id);
-        }
       }
     }
 

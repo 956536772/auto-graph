@@ -106,8 +106,11 @@ export class ShapeRegistry {
         const id = this.idForObject(jxgObject);
         if (!id) return null;
         const before = this.snapshot();
-        const ids = this.collectDependentIds(this.collectOwnedIds([id]));
+        const ownedIds = this.collectOwnedIds([id]);
+        const ids = this.collectDependentIds(ownedIds);
+        const preservedEntries = this.buildPreservedEntriesForRemoval(ids, ownedIds);
         const removedId = this.removeIds(board, ids);
+        this.restorePreservedEntries(board, preservedEntries);
         this.commitSnapshotAction('delete', before, this.snapshot(), {
             label: 'delete',
             ids
@@ -139,14 +142,19 @@ export class ShapeRegistry {
         const ids = [];
         if (!obj) return ids;
 
-        if (obj.elType === 'polygon') {
-            if (Array.isArray(obj.meta?.closedSegmentIds)) {
-                ids.push(...obj.meta.closedSegmentIds);
-            }
+        if (obj.elType === 'polygon' && Array.isArray(obj.meta?.closedSegmentIds)) {
+            ids.push(...obj.meta.closedSegmentIds);
             if (Array.isArray(obj.vertices)) {
                 obj.vertices.forEach((point) => {
                     if (point?.registryId) ids.push(point.registryId);
                 });
+            }
+        }
+
+        if (this.isCircleLike(obj) && obj.meta?.centerPointId) {
+            const centerPoint = this.shapes.get(obj.meta.centerPointId);
+            if (centerPoint?.meta?.generatedCircleCenterFor === obj.registryId) {
+                ids.push(obj.meta.centerPointId);
             }
         }
 
@@ -173,10 +181,12 @@ export class ShapeRegistry {
     }
     dependsOn(obj, target) {
         if (!obj || !target) return false;
+        if (this.isGeneratedCenterForCircle(target, obj)) return false;
         if (obj.point1 === target || obj.point2 === target || obj.point3 === target) return true;
         if (obj.center === target || obj.radiuspoint === target) return true;
         if (Array.isArray(obj.vertices) && obj.vertices.includes(target)) return true;
         if (Array.isArray(obj.parents) && obj.parents.includes(target)) return true;
+        if (obj.meta?.centerPointId && obj.meta.centerPointId === target.registryId) return true;
         if (Array.isArray(obj.meta?.historyParentIds) && obj.meta.historyParentIds.includes(target.registryId)) return true;
         if (Array.isArray(obj.meta?.closedSegmentIds) && obj.meta.closedSegmentIds.includes(target.registryId)) return true;
         return false;
@@ -205,6 +215,117 @@ export class ShapeRegistry {
         }
 
         return removedIds.at(-1) || null;
+    }
+    buildPreservedEntriesForRemoval(ids, ownedIds = []) {
+        const ownedSet = new Set(ownedIds);
+        return ids
+            .map((id) => {
+                if (ownedSet.has(id)) {
+                    return null;
+                }
+                const obj = this.shapes.get(id);
+                if (this.isPreservableDerivedCircle(obj)) {
+                    return this.createIndependentCircleEntry(id, obj);
+                }
+                if (this.isPreservableGeneratedCenterPoint(obj)) {
+                    return this.createIndependentPointEntry(id, obj);
+                }
+                return null;
+            })
+            .filter(Boolean);
+    }
+    isPreservableDerivedCircle(obj) {
+        return obj?.elType === 'circumcircle' || obj?.elType === 'incircle';
+    }
+    isPreservableGeneratedCenterPoint(obj) {
+        return (
+            (obj?.elType === 'point' || obj?.elType === 'glider') &&
+            Boolean(obj.meta?.generatedCircleCenterFor)
+        );
+    }
+    isCircleLike(obj) {
+        return obj?.elType === 'circle' || obj?.elType === 'circumcircle' || obj?.elType === 'incircle';
+    }
+    isGeneratedCenterForCircle(target, obj) {
+        return (
+            this.isCircleLike(obj) &&
+            target?.meta?.generatedCircleCenterFor === obj.registryId &&
+            obj?.meta?.centerPointId === target.registryId
+        );
+    }
+    createIndependentCircleEntry(id, obj) {
+        const source = this.snapshotObject(id, obj, this.history.indexOf(id));
+        const center = source.center;
+        const radius = source.radius;
+        if (!center || !Number.isFinite(radius) || radius <= 0) {
+            return null;
+        }
+
+        const meta = this.cloneMeta(source.meta) || {};
+        delete meta.historyAction;
+        delete meta.historyParentIds;
+
+        return {
+            id,
+            type: 'circle',
+            order: source.order,
+            label: source.label,
+            position: center,
+            center,
+            centerId: meta.centerPointId || source.centerId,
+            radius,
+            meta: {
+                ...meta,
+                preservedFrom: source.type
+            }
+        };
+    }
+    createIndependentPointEntry(id, obj) {
+        const source = this.snapshotObject(id, obj, this.history.indexOf(id));
+        const coords = source.coords || (source.position ? [source.position.x, source.position.y] : null);
+        if (!Array.isArray(coords) || coords.some((coord) => !Number.isFinite(coord))) {
+            return null;
+        }
+
+        const meta = this.cloneMeta(source.meta) || {};
+        delete meta.historyParentIds;
+
+        return {
+            id,
+            type: 'point',
+            order: source.order,
+            label: source.label,
+            position: source.position,
+            coords,
+            meta: {
+                ...meta,
+                preservedFrom: source.type
+            }
+        };
+    }
+    restorePreservedEntries(board, entries) {
+        entries.forEach((entry) => {
+            const obj = this.createObjectFromSnapshot(board, entry);
+            if (!obj) {
+                return;
+            }
+            if (entry.meta && typeof entry.meta === 'object') {
+                obj.meta = { ...(obj.meta || {}), ...entry.meta };
+            }
+            obj.registryId = entry.id;
+            this.shapes.set(entry.id, obj);
+            this.insertHistoryId(entry.id, entry.order);
+            if (typeof this.restoreHandler === 'function') {
+                this.restoreHandler(obj, entry);
+            }
+        });
+    }
+    insertHistoryId(id, order) {
+        this.history = this.history.filter((currentId) => currentId !== id);
+        const index = Number.isInteger(order)
+            ? Math.max(0, Math.min(order, this.history.length))
+            : this.history.length;
+        this.history.splice(index, 0, id);
     }
     get(id) { return this.shapes.get(id); }
     exists(id) { return this.shapes.has(id); }

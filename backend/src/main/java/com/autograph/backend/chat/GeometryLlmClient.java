@@ -3,7 +3,10 @@ package com.autograph.backend.chat;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.Content;
+import dev.langchain4j.data.message.ImageContent;
 import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.TextContent;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.exception.HttpException;
 import dev.langchain4j.exception.LangChain4jException;
@@ -79,6 +82,10 @@ public class GeometryLlmClient {
     }
 
     LlmDirectResult extractInstructions(String text, ContextIndex context) {
+        return extractInstructions(text, context, null);
+    }
+
+    LlmDirectResult extractInstructions(String text, ContextIndex context, ChatImagePayload image) {
         if (!enabled) {
             LOGGER.warn("Geometry LLM unavailable: {}", LlmFailureReason.DISABLED);
             return LlmDirectResult.unavailable(LlmFailureReason.DISABLED);
@@ -95,7 +102,7 @@ public class GeometryLlmClient {
         try {
             List<ChatMessage> messages = new ArrayList<>();
             messages.add(SystemMessage.from(workflow));
-            messages.add(UserMessage.from(buildUserPrompt(text, context)));
+            messages.add(buildUserMessage(text, context, image));
 
             var response = chatModel.chat(messages);
             var content = response.aiMessage().text();
@@ -120,6 +127,18 @@ public class GeometryLlmClient {
             LOGGER.warn("Geometry LLM returned malformed response: {}", exception.getMessage());
             return LlmDirectResult.invalid(LlmFailureReason.MALFORMED_RESPONSE);
         }
+    }
+
+    private UserMessage buildUserMessage(String text, ContextIndex context, ChatImagePayload image) throws IOException {
+        var prompt = buildUserPrompt(text, context, image);
+        if (image == null || image.data() == null || image.data().isBlank()) {
+            return UserMessage.from(prompt);
+        }
+
+        List<Content> contents = new ArrayList<>();
+        contents.add(TextContent.from(prompt));
+        contents.add(ImageContent.from(image.data(), normalizeMediaType(image.mediaType())));
+        return UserMessage.from(contents);
     }
 
     private LlmDirectResult parseDirectContent(String content) {
@@ -148,14 +167,18 @@ public class GeometryLlmClient {
         }
     }
 
-    private String buildUserPrompt(String text, ContextIndex context) throws IOException {
+    private String buildUserPrompt(String text, ContextIndex context, ChatImagePayload image) throws IOException {
         var contextPayload = context.toLlmSummary();
+        var imageNote = image == null || image.data() == null || image.data().isBlank()
+            ? "No image was attached."
+            : "An image is attached to this user message. Use it as visual context for the geometry request.";
         return """
             You are handling one turn in a continuous geometry drawing conversation.
 
             Decide the next incremental drawing operation from:
             1. The current user request below.
             2. The current canvas context JSON below.
+            3. The attached image when present.
 
             Current canvas context is the only source of truth for what exists now. The user may have manually changed the canvas after earlier AI turns.
 
@@ -165,8 +188,15 @@ public class GeometryLlmClient {
             Current canvas context JSON:
             %s
 
+            Image attachment:
+            %s
+
             Return only the JSON response for this turn.
-            """.formatted(text, objectMapper.writeValueAsString(contextPayload));
+            """.formatted(text, objectMapper.writeValueAsString(contextPayload), imageNote);
+    }
+
+    private String normalizeMediaType(String mediaType) {
+        return mediaType == null || mediaType.isBlank() ? "image/png" : mediaType;
     }
 
     private JsonNode parseJsonContent(String content) throws IOException {

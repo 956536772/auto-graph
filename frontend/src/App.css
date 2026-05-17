@@ -299,6 +299,15 @@ html {
   background: linear-gradient(135deg, var(--brand), var(--brand-strong));
 }
 
+.message-attachment {
+  margin-top: 8px;
+  padding: 5px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.18);
+  font-size: 11px;
+  font-weight: 800;
+}
+
 #prompt-suggestions {
   display: flex;
   flex-direction: column;
@@ -324,10 +333,82 @@ html {
 }
 #chat-input-area {
   display: flex;
+  flex-direction: column;
   gap: 8px;
   padding: 14px;
   border-top: 1px solid rgba(16, 32, 51, 0.08);
   background: rgba(255, 255, 255, 0.48);
+}
+
+.chat-attachment-preview {
+  display: grid;
+  grid-template-columns: 44px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid rgba(15, 124, 128, 0.18);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--canvas-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chat-attachment-preview img {
+  width: 44px;
+  height: 36px;
+  border-radius: 10px;
+  object-fit: cover;
+  background: #fff;
+}
+
+.chat-attachment-preview button {
+  border: none;
+  border-radius: 9px;
+  padding: 6px 8px;
+  color: var(--danger);
+  background: rgba(196, 62, 53, 0.08);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.chat-draft-note {
+  border-radius: 12px;
+  padding: 8px 10px;
+  color: var(--brand-strong);
+  background: var(--brand-soft);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.chat-compose-row {
+  display: flex;
+  gap: 8px;
+}
+
+#chat-image-input {
+  display: none;
+}
+
+.attach-image-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border: 1px solid rgba(15, 124, 128, 0.18);
+  border-radius: 12px;
+  color: var(--brand-strong);
+  background: rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.attach-image-btn:hover {
+  background: #fff;
 }
 
 #chat-input {

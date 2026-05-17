@@ -85,9 +85,6 @@ export class DrawingEngine {
                             highlight: false,
                             showInfobox: false
                         });
-                        if (params.centerResultId) {
-                            this.registry.register(params.centerResultId, center);
-                        }
                         hiddenControlPoints = [through];
                     } else {
                         center = this.resolveRef(params.center);
@@ -267,12 +264,8 @@ export class DrawingEngine {
             if (meta && typeof meta === 'object') {
                 obj.meta = { ...(obj.meta || {}), ...meta };
             }
-            this.registry.register(result_id, obj);
-            this.attachHistoryListeners(obj);
-        }
-
-        if (obj && typeof this.options.onObjectCreated === 'function') {
-            this.options.onObjectCreated(obj, ins);
+            this.registerCircleCenterIfNeeded(obj, ins);
+            this.registerCreatedObject(result_id, obj, ins);
         }
 
         return obj;
@@ -285,6 +278,106 @@ export class DrawingEngine {
             strokeWidth: 2,
             label: { fixed: false }
         };
+    }
+    registerCreatedObject(id, obj, instruction) {
+        this.registry.register(id, obj);
+        this.attachHistoryListeners(obj);
+        if (typeof this.options.onObjectCreated === 'function') {
+            this.options.onObjectCreated(obj, instruction);
+        }
+    }
+    registerCircleCenterIfNeeded(circle, instruction) {
+        const { action, params = {}, result_id } = instruction;
+        if (!result_id || !this.isCircleInstruction(action) || !circle?.center) {
+            return;
+        }
+
+        const center = circle.center;
+        const existingCenterId = this.registry.idForObject(center);
+        const centerId = existingCenterId || this.getUniqueResultId(params.centerResultId || `${result_id}_center`);
+        const centerLabel = this.getCircleCenterLabel(center, params.centerLabel);
+
+        circle.meta = {
+            ...(circle.meta || {}),
+            centerPointId: centerId
+        };
+
+        if (!existingCenterId) {
+            this.ensureVisibleCircleCenter(center, centerLabel);
+            center.meta = {
+                ...(center.meta || {}),
+                generatedCircleCenterFor: result_id
+            };
+            this.registerCreatedObject(centerId, center, {
+                action: 'place_point',
+                params: { x: center.X?.(), y: center.Y?.() },
+                result_id: centerId,
+                label: centerLabel,
+                meta: center.meta,
+                generatedFor: action
+            });
+        }
+    }
+    isCircleInstruction(action) {
+        return action === 'circle' || action === 'circumcircle' || action === 'incircle';
+    }
+    getUniqueResultId(baseId) {
+        const base = baseId || `circle_center_${Date.now()}`;
+        if (!this.registry.exists(base)) {
+            return base;
+        }
+
+        let index = 1;
+        while (this.registry.exists(`${base}_${index}`)) {
+            index += 1;
+        }
+        return `${base}_${index}`;
+    }
+    getCircleCenterLabel(center, requestedLabel) {
+        const currentLabel = this.readObjectName(center);
+        if (currentLabel) {
+            return currentLabel;
+        }
+        if (requestedLabel) {
+            return requestedLabel;
+        }
+        if (!this.isPointLabelUsed('O')) {
+            return 'O';
+        }
+
+        let index = 1;
+        while (this.isPointLabelUsed(`O${index}`)) {
+            index += 1;
+        }
+        return `O${index}`;
+    }
+    isPointLabelUsed(label) {
+        return this.registry.entries().some(([, obj]) => (
+            (obj?.elType === 'point' || obj?.elType === 'glider') &&
+            this.readObjectName(obj) === label
+        ));
+    }
+    readObjectName(obj) {
+        if (!obj) {
+            return '';
+        }
+        if (typeof obj.getName === 'function') {
+            return obj.getName() || '';
+        }
+        return obj.name || '';
+    }
+    ensureVisibleCircleCenter(center, label) {
+        center.setAttribute?.({
+            visible: true,
+            name: label || '',
+            withLabel: Boolean(label),
+            size: 3,
+            fillColor: '#ff8c00',
+            strokeColor: '#d46b08',
+            fixed: true,
+            highlight: false,
+            label: { fixed: false }
+        });
     }
     createObjectFromSnapshot(entry) {
         const commonAttr = this.getCommonAttributes(entry.label);
@@ -338,6 +431,30 @@ export class DrawingEngine {
                         obj = this.board.create('circle', [center, through], {
                             ...commonAttr, draggable: true, hasInnerPoints: true,
                             fillColor: '#1890ff', fillOpacity: 0.1
+                        });
+                    } else if (entry.center && typeof entry.radius === 'number') {
+                        const centerPoint = this.board.create('point', [entry.center.x, entry.center.y], {
+                            visible: false,
+                            name: '',
+                            fixed: true,
+                            highlight: false,
+                            showInfobox: false
+                        });
+                        const throughPoint = this.board.create('point', [entry.center.x + entry.radius, entry.center.y], {
+                            visible: false,
+                            name: '',
+                            fixed: true,
+                            highlight: false,
+                            showInfobox: false
+                        });
+                        obj = this.board.create('circle', [centerPoint, throughPoint], {
+                            ...commonAttr, draggable: true, hasInnerPoints: true,
+                            fillColor: '#1890ff', fillOpacity: 0.1
+                        });
+                        this.attachTranslationDrag(obj, [centerPoint, throughPoint]);
+                        obj.on('remove', () => {
+                            this.safeRemoveObject(centerPoint);
+                            this.safeRemoveObject(throughPoint);
                         });
                     } else if (center && typeof entry.radius === 'number') {
                         const throughPoint = this.board.create('point', [center.X() + entry.radius, center.Y()], {

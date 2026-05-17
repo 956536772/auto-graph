@@ -9,13 +9,21 @@ import {
   sameGeometryObject
 } from './geometry.js';
 import { getNextPointLabel, openPointLabelEditor } from './labels.js';
-import { chooseTargetFromElements, isRegisteredSelectableElement, preferPointSnapTarget } from './selection.js';
+import {
+  chooseTargetFromElements,
+  getCircleSnapDistancePx,
+  isWithinSnapRadius,
+  isRegisteredSelectableElement,
+  PATH_SNAP_RADIUS_PX,
+  preferPointSnapTarget,
+  shouldUseSnapping
+} from './selection.js';
 
 const POINT_TYPES = new Set(['point', 'glider']);
 const LINE_TYPES = ['segment', 'line', 'parallel', 'perpendicular', 'bisector', 'tangent'];
 const PATH_TYPES = new Set([...LINE_TYPES, 'circle', 'ellipse', 'functiongraph']);
 const LINEAR_PATH_TYPES = new Set(LINE_TYPES);
-const SNAP_RADIUS_PX = 14;
+export const SNAP_RADIUS_PX = 14;
 const PREVIEW_ATTRS = {
   dash: 2,
   strokeColor: '#999',
@@ -604,8 +612,9 @@ export class ManualDrawingController {
   }
 
   resolvePointSelection(event, { allowCreate, allowGlider }) {
-    const directTarget = this.getTargetUnderMouse(event);
-    const snapTarget = directTarget || this.getNearestSnapTarget(event, { includePath: allowGlider });
+    const snapTarget = shouldUseSnapping(event)
+      ? this.getSnapTargetUnderMouse(event, { includePath: allowGlider }) || this.getNearestSnapTarget(event, { includePath: allowGlider })
+      : null;
     const coords = this.getSnappedPosition(event, snapTarget);
 
     if (snapTarget?.type === 'point') {
@@ -710,6 +719,24 @@ export class ManualDrawingController {
     return chooseTargetFromElements(elements, this.registry, options);
   }
 
+  getSnapTargetUnderMouse(event, options = {}) {
+    const target = this.getTargetUnderMouse(event, options);
+    if (!target || target.type === 'point') {
+      return target;
+    }
+    if (!options.includePath || target.type !== 'path') {
+      return null;
+    }
+
+    const mouse = this.getMousePosition(event);
+    const distance = this.distanceToPathPx(mouse, target.obj);
+    if (isWithinSnapRadius(distance, PATH_SNAP_RADIUS_PX)) {
+      return { ...target, distance };
+    }
+
+    return null;
+  }
+
   getNearestSnapTarget(event, options = {}) {
     const mouse = this.getMousePosition(event);
     let nearest = null;
@@ -721,16 +748,16 @@ export class ManualDrawingController {
 
       if (POINT_TYPES.has(obj.elType)) {
         const distance = this.distanceToPointPx(mouse, obj);
-        if (distance <= SNAP_RADIUS_PX) {
+        if (isWithinSnapRadius(distance, SNAP_RADIUS_PX)) {
           nearest = preferPointSnapTarget(nearest, { type: 'point', obj, distance });
         }
         return;
       }
 
-      if (options.includePath && PATH_TYPES.has(obj.elType) && typeof obj.hasPoint === 'function') {
-        const screen = this.toScreenCoords(mouse);
-        if (obj.hasPoint(screen.x, screen.y)) {
-          nearest = preferPointSnapTarget(nearest, { type: 'path', obj, distance: SNAP_RADIUS_PX });
+      if (options.includePath && PATH_TYPES.has(obj.elType)) {
+        const distance = this.distanceToPathPx(mouse, obj);
+        if (isWithinSnapRadius(distance, PATH_SNAP_RADIUS_PX)) {
+          nearest = preferPointSnapTarget(nearest, { type: 'path', obj, distance });
         }
       }
     });
@@ -744,11 +771,23 @@ export class ManualDrawingController {
   }
 
   getSnappedPosition(event, snapTarget = null) {
-    const target = snapTarget || this.getNearestSnapTarget(event, { includePath: true });
+    const target = shouldUseSnapping(event) ? snapTarget || this.getNearestSnapTarget(event, { includePath: true }) : null;
     if (target?.type === 'point') {
       return { x: target.obj.X(), y: target.obj.Y() };
     }
     return this.getMousePosition(event);
+  }
+
+  distanceToPathPx(mouse, path) {
+    if (path?.elType === 'circle') {
+      return getCircleSnapDistancePx(path, mouse, (coords) => this.toScreenCoords(coords));
+    }
+
+    const screen = this.toScreenCoords(mouse);
+    if (typeof path?.hasPoint === 'function' && path.hasPoint(screen.x, screen.y)) {
+      return 0;
+    }
+    return Number.POSITIVE_INFINITY;
   }
 
   distanceToPointPx(mouse, point) {

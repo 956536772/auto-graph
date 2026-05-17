@@ -3,6 +3,8 @@ const LINE_TYPES = ['segment', 'line', 'parallel', 'perpendicular', 'bisector', 
 const PATH_TYPES = new Set([...LINE_TYPES, 'circle', 'ellipse']);
 const SELECTABLE_TYPES = new Set(['point', 'glider', ...LINE_TYPES, 'circle', 'ellipse', 'polygon', 'angle']);
 
+export const PATH_SNAP_RADIUS_PX = 6;
+
 export function isRegisteredSelectableElement(element, registry) {
   return Boolean(
     element &&
@@ -63,4 +65,38 @@ export function preferPointSnapTarget(current, candidate) {
     return candidate;
   }
   return current;
+}
+
+export function shouldUseSnapping(event) {
+  return event?.shiftKey !== true;
+}
+
+export function isWithinSnapRadius(distance, radius) {
+  return Number.isFinite(distance) && distance <= radius;
+}
+
+export function getCircleSnapDistancePx(circle, mouse, toScreenCoords) {
+  if (!circle || circle.elType !== 'circle' || typeof toScreenCoords !== 'function') {
+    return Number.POSITIVE_INFINITY;
+  }
+  if (!circle.center || typeof circle.center.X !== 'function' || typeof circle.center.Y !== 'function') {
+    return Number.POSITIVE_INFINITY;
+  }
+  if (typeof circle.Radius !== 'function') {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const center = { x: circle.center.X(), y: circle.center.Y() };
+  const radius = circle.Radius();
+  if (!Number.isFinite(center.x) || !Number.isFinite(center.y) || !Number.isFinite(radius) || radius <= 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const mouseScreen = toScreenCoords(mouse);
+  const centerScreen = toScreenCoords(center);
+  const edgeScreen = toScreenCoords({ x: center.x + radius, y: center.y });
+  const screenRadius = Math.hypot(edgeScreen.x - centerScreen.x, edgeScreen.y - centerScreen.y);
+  const mouseDistance = Math.hypot(mouseScreen.x - centerScreen.x, mouseScreen.y - centerScreen.y);
+
+  return Math.abs(mouseDistance - screenRadius);
 }

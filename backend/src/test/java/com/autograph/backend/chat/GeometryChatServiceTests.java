@@ -35,6 +35,23 @@ class GeometryChatServiceTests {
     }
 
     @Test
+    void shouldUseLlmWhenImageIsAttachedEvenForDirectTextSpecialCase() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("place_point", Map.of("x", 0, "y", 0), "P", "P")
+        ), "已根据图片绘制点P。")));
+
+        var response = service.handle(new ChatRequest(
+            "画一条线段",
+            List.of(),
+            new ChatImagePayload("image/png", "abc123", "diagram.png")
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals("place_point", response.instructions().get(0).action());
+        assertEquals("已根据图片绘制点P。", response.responseText());
+    }
+
+    @Test
     void shouldExpandWordProblemHighLevelInstructionsToBaseInstructions() {
         var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
             new DrawingInstruction("regular_polygon", Map.of(
@@ -515,6 +532,11 @@ class GeometryChatServiceTests {
 
         @Override
         LlmDirectResult extractInstructions(String text, ContextIndex context) {
+            return result;
+        }
+
+        @Override
+        LlmDirectResult extractInstructions(String text, ContextIndex context, ChatImagePayload image) {
             return result;
         }
     }
