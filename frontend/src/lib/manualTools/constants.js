@@ -13,7 +13,8 @@ export const TOOLS = {
   ANGLE_BISECTOR: '角平分线',
   UNDO: '撤销',
   REDO: '重做',
-  CLEAR: '清空'
+  CLEAR: '清空',
+  PREVIEW: '预览'
 };
 
 export const DRAWING_TOOL_SET = new Set([

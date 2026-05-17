@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import test from 'node:test';
 
 import { ShapeRegistry } from '../src/lib/ShapeRegistry.js';
+import { collectPointLabelOverlays, exportBoardPreviewSvg } from '../src/lib/previewExport.js';
 import { TOOLS } from '../src/lib/manualTools/constants.js';
 import {
   buildCircleDefinition,
@@ -11,6 +13,105 @@ import {
   getToolSwitchStatus
 } from '../src/lib/manualTools/geometry.js';
 import { chooseTargetFromElements, preferPointSnapTarget } from '../src/lib/manualTools/selection.js';
+
+class FakeSvgElement {
+  constructor(tagName, textContent = '') {
+    this.tagName = tagName;
+    this.nodeName = tagName;
+    this.textContent = textContent;
+    this.children = [];
+    this.attributes = {};
+    this.style = {};
+    this.removed = false;
+    this.classList = {
+      contains: () => false
+    };
+  }
+
+  get firstChild() {
+    return this.children.find((child) => !child.removed) || null;
+  }
+
+  setAttribute(name, value) {
+    this.attributes[name] = String(value);
+  }
+
+  getAttribute(name) {
+    return this.attributes[name] ?? null;
+  }
+
+  appendChild(child) {
+    this.children.push(child);
+    return child;
+  }
+
+  insertBefore(child) {
+    this.children.unshift(child);
+    return child;
+  }
+
+  remove() {
+    this.removed = true;
+  }
+
+  querySelectorAll(selector) {
+    const descendants = this.children.flatMap((child) => [child, ...child.querySelectorAll('*')]);
+    const liveDescendants = descendants.filter((child) => !child.removed);
+
+    if (selector === '*') {
+      return liveDescendants;
+    }
+
+    const tagNames = selector
+      .split(',')
+      .map((item) => item.trim().toLowerCase())
+      .filter((item) => /^[a-z]+$/.test(item));
+
+    if (tagNames.length > 0) {
+      return liveDescendants.filter((child) => tagNames.includes(child.tagName.toLowerCase()));
+    }
+
+    return [];
+  }
+
+  toString() {
+    if (this.removed) {
+      return '';
+    }
+
+    const attrs = Object.entries(this.attributes)
+      .map(([key, value]) => `${key}="${value}"`)
+      .join(' ');
+    const openTag = attrs ? `<${this.tagName} ${attrs}>` : `<${this.tagName}>`;
+    const content = `${this.textContent}${this.children.map((child) => child.toString()).join('')}`;
+    return `${openTag}${content}</${this.tagName}>`;
+  }
+}
+
+globalThis.DOMParser = class {
+  parseFromString(svgString) {
+    const root = new FakeSvgElement('svg');
+    const textMatches = svgString.matchAll(/<text[^>]*>(.*?)<\/text>/g);
+    for (const match of textMatches) {
+      root.appendChild(new FakeSvgElement('text', match[1]));
+    }
+
+    return {
+      documentElement: root,
+      querySelector: () => null,
+      createElementNS: (_namespace, tagName) => new FakeSvgElement(tagName)
+    };
+  }
+};
+
+globalThis.XMLSerializer = class {
+  serializeToString(node) {
+    return node.toString();
+  }
+};
+
+globalThis.atob = (value) => Buffer.from(value, 'base64').toString('binary');
+globalThis.TextDecoder = globalThis.TextDecoder || (await import('node:util')).TextDecoder;
 
 function createObject(id) {
   return { id };
@@ -363,4 +464,109 @@ test('preferPointSnapTarget keeps points ahead of path hits', () => {
 
   assert.equal(target.type, 'point');
   assert.equal(target.obj, point);
+});
+
+test('collectPointLabelOverlays captures visible point labels for preview export', () => {
+  const board = {
+    objects: {
+      A: {
+        elType: 'point',
+        hasLabel: true,
+        visPropCalc: { visible: true },
+        getName: () => 'A',
+        X: () => 1,
+        Y: () => 2,
+        label: {
+          visPropCalc: { visible: true },
+          visProp: { fontsize: '18' },
+          coords: { scrCoords: [1, 120, 80] }
+        }
+      },
+      B: {
+        elType: 'point',
+        hasLabel: true,
+        visPropCalc: { visible: false },
+        getName: () => 'B',
+        X: () => 3,
+        Y: () => 4,
+        label: {
+          visPropCalc: { visible: true },
+          coords: { scrCoords: [1, 200, 90] }
+        }
+      },
+      C: {
+        elType: 'point',
+        hasLabel: true,
+        visPropCalc: { visible: true },
+        getName: () => 'C',
+        X: () => 5,
+        Y: () => 6,
+        coords: { scrCoords: [1, 40, 50] },
+        label: {
+          visPropCalc: { visible: true }
+        }
+      }
+    }
+  };
+
+  assert.deepEqual(collectPointLabelOverlays(board), [
+    { text: 'A', x: 120, y: 80, anchorX: 1, anchorY: 2, fontSize: 18 },
+    { text: 'C', x: 50, y: 40, anchorX: 5, anchorY: 6, fontSize: 16 }
+  ]);
+});
+
+test('exportBoardPreviewSvg restores board text display after successful export', () => {
+  const displays = [];
+  const rawSvg = '<svg xmlns="http://www.w3.org/2000/svg"><text>A</text></svg>';
+  const board = {
+    options: { text: { display: 'html' } },
+    origin: { scrCoords: [1, 0, 100] },
+    unitX: 10,
+    unitY: 10,
+    renderer: {
+      dumpToDataURI: () => `data:image/svg+xml;base64,${Buffer.from(rawSvg).toString('base64')}`
+    },
+    setAttribute(attrs) {
+      this.options.text.display = attrs.text.display;
+      displays.push(attrs.text.display);
+    },
+    update() {}
+  };
+
+  const result = exportBoardPreviewSvg({
+    board,
+    selection: { xmin: 10, xmax: 0, ymin: 0, ymax: 10 }
+  });
+
+  assert.match(result, /<svg/);
+  assert.deepEqual(displays, ['internal', 'html']);
+  assert.equal(board.options.text.display, 'html');
+});
+
+test('exportBoardPreviewSvg restores board text display when SVG export fails', () => {
+  const displays = [];
+  const board = {
+    options: { text: { display: 'html' } },
+    origin: { scrCoords: [1, 0, 100] },
+    unitX: 10,
+    unitY: 10,
+    renderer: {
+      dumpToDataURI: () => 'not-svg-data'
+    },
+    setAttribute(attrs) {
+      this.options.text.display = attrs.text.display;
+      displays.push(attrs.text.display);
+    },
+    update() {}
+  };
+
+  assert.throws(
+    () => exportBoardPreviewSvg({
+      board,
+      selection: { xmin: 0, xmax: 10, ymin: 0, ymax: 10 }
+    }),
+    /无法读取画布 SVG 数据/
+  );
+  assert.deepEqual(displays, ['internal', 'html']);
+  assert.equal(board.options.text.display, 'html');
 });

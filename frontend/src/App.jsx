@@ -5,9 +5,17 @@ import { DrawingEngine } from './lib/DrawingEngine';
 import { ManualDrawingController } from './lib/manualTools/ManualDrawingController.js';
 import { TOOLS } from './lib/manualTools/constants.js';
 import { ensurePointLabelEditor, getNextPointLabel } from './lib/manualTools/labels.js';
+import { exportBoardPreviewSvg, svgToObjectUrl } from './lib/previewExport.js';
 import './App.css';
 
 const INITIAL_BOUNDING_BOX = [-10, 10, 10, -10];
+
+const IconPreview = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+    <circle cx="12" cy="13" r="4"></circle>
+  </svg>
+);
 
 const IconSelect = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"></path><path d="M13 13l6 6"></path></svg>;
 const IconPoint = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle></svg>;
@@ -72,6 +80,150 @@ const PROMPT_SUGGESTIONS = [
   '过圆上一点作切线'
 ];
 
+const PreviewModal = ({ data, board, onClose }) => {
+  const [svgUrl, setSvgUrl] = useState(null);
+  const [errorMessage, setErrorMessage] = useState(null);
+
+  useEffect(() => {
+    if (!data || !board) return;
+
+    let cancelled = false;
+    let objectUrl = null;
+
+    const generatePreview = () => {
+      try {
+        const examSvg = exportBoardPreviewSvg({ board, selection: data });
+        objectUrl = svgToObjectUrl(examSvg);
+        if (!cancelled) {
+          setSvgUrl(objectUrl);
+          setErrorMessage(null);
+        }
+      } catch (err) {
+        console.error('Preview failed:', err);
+        if (!cancelled) {
+          setErrorMessage(`生成预览失败：${err.message}`);
+        }
+      }
+    };
+
+    generatePreview();
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [data, board, onClose]);
+
+  const downloadFile = (type) => {
+    if (!svgUrl) return;
+    const link = document.createElement('a');
+    if (type === 'svg') {
+      link.href = svgUrl;
+      link.download = `geometry_export_${Date.now()}.svg`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          const scale = 2; // High resolution
+          canvas.width = (img.naturalWidth || img.width) * scale;
+          canvas.height = (img.naturalHeight || img.height) * scale;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = 'white';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          link.href = canvas.toDataURL('image/png');
+          link.download = `geometry_export_${Date.now()}.png`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        } catch (err) {
+          console.error('PNG export failed:', err);
+          alert('导出 PNG 失败，请尝试导出 SVG');
+        }
+      };
+      img.onerror = (e) => {
+        console.error('Image load error:', e);
+        alert('解析预览图失败，无法导出 PNG');
+      };
+      img.src = svgUrl;
+    }
+  };
+
+  const copyToClipboard = () => {
+    if (!svgUrl) return;
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth || img.width;
+        canvas.height = img.naturalHeight || img.height;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = 'white';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            alert('生成图片数据失败');
+            return;
+          }
+          if (typeof ClipboardItem !== 'undefined') {
+            try {
+              const data = [new ClipboardItem({ [blob.type]: blob })];
+              navigator.clipboard.write(data).then(() => {
+                alert('图片已复制到剪贴板');
+              }).catch(err => {
+                console.error('Clipboard write failed:', err);
+                alert('由于浏览器安全限制，无法直接复制图片，请使用导出 PNG 功能');
+              });
+            } catch (err) {
+              console.error('Clipboard write failed:', err);
+              alert('由于浏览器安全限制，无法直接复制图片，请使用导出 PNG 功能');
+            }
+          } else {
+            alert('您的浏览器不支持直接复制图片，请使用导出 PNG 功能');
+          }
+        }, 'image/png');
+      } catch (err) {
+        console.error('Clipboard copy failed:', err);
+        alert('复制失败，请尝试导出 PNG');
+      }
+    };
+    img.onerror = () => {
+      alert('解析预览图失败，无法复制');
+    };
+    img.src = svgUrl;
+  };
+
+  if (!svgUrl) return null;
+
+  return (
+    <div className="preview-modal-overlay">
+      <div className="preview-modal floating-panel">
+        <div className="preview-header">
+          <span>预览</span>
+          <button className="close-btn" onClick={onClose}>×</button>
+        </div>
+        <div className="preview-content">
+          {svgUrl && <img src={svgUrl} alt="Preview" />}
+          {!svgUrl && !errorMessage && <div className="preview-state">正在生成预览...</div>}
+          {errorMessage && <div className="preview-state error">{errorMessage}</div>}
+        </div>
+        <div className="preview-footer">
+          <button onClick={() => downloadFile('png')} disabled={!svgUrl}>导出 PNG</button>
+          <button onClick={() => downloadFile('svg')} disabled={!svgUrl}>导出 SVG</button>
+          <button className="primary" onClick={copyToClipboard} disabled={!svgUrl}>复制到剪贴板</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   const boardRef = useRef(null);
   const registryRef = useRef(new ShapeRegistry());
@@ -83,9 +235,11 @@ export default function App() {
   const [messages, setMessages] = useState([{ role: 'ai', text: '你好！我是你的几何助手。你可以让我画三角形、作外接圆/内切圆、过圆上一点作切线，或求两圆交点。' }]);
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [previewData, setPreviewData] = useState(null);
+  const [board, setBoard] = useState(null);
 
   useEffect(() => {
-    const board = JXG.JSXGraph.initBoard(boardRef.current, {
+    const boardInstance = JXG.JSXGraph.initBoard(boardRef.current, {
       boundingbox: INITIAL_BOUNDING_BOX,
       axis: false,
       grid: true,
@@ -97,13 +251,14 @@ export default function App() {
       pan: { enabled: true, needTwoFingers: false, needShift: false },
       zoom: { wheel: true, needShift: false }
     });
+    setBoard(boardInstance);
 
     const decorateObject = (obj) => {
       if (obj.elType !== 'point' && obj.elType !== 'glider') {
         return;
       }
       ensurePointLabelEditor(obj, {
-        board,
+        board: boardInstance,
         suggestLabel: () => getNextPointLabel(registryRef.current),
         onBeforeLabelEdit: () => registryRef.current.snapshot(),
         onLabelEdit: ({ beforeState }) => {
@@ -112,19 +267,20 @@ export default function App() {
       });
     };
 
-    engineRef.current = new DrawingEngine(board, registryRef.current, {
+    engineRef.current = new DrawingEngine(boardInstance, registryRef.current, {
       onObjectCreated: decorateObject
     });
     controllerRef.current = new ManualDrawingController({
-      board,
+      board: boardInstance,
       engine: engineRef.current,
       registry: registryRef.current,
       onStatusChange: setStatus,
-      onToolChange: setActiveTool
+      onToolChange: setActiveTool,
+      onPreviewSelect: setPreviewData
     });
 
     const handleResize = () => {
-      board.resizeContainer(window.innerWidth, window.innerHeight);
+      boardInstance.resizeContainer(window.innerWidth, window.innerHeight);
     };
 
     window.addEventListener('resize', handleResize);
@@ -133,7 +289,8 @@ export default function App() {
       window.removeEventListener('resize', handleResize);
       controllerRef.current?.destroy();
       controllerRef.current = null;
-      JXG.JSXGraph.freeBoard(board);
+      JXG.JSXGraph.freeBoard(boardInstance);
+      setBoard(null);
     };
   }, []);
 
@@ -268,6 +425,17 @@ export default function App() {
         style={{ width: '100vw', height: '100vh', position: 'absolute', top: 0, left: 0 }}
       ></div>
 
+      <div id="top-actions" className="floating-panel">
+        <button
+          className={`action-btn ${activeTool === TOOLS.PREVIEW ? 'active' : ''}`}
+          onClick={() => handleToolClick(TOOLS.PREVIEW)}
+          title="框选区域并导出为试卷风格图片"
+        >
+          <IconPreview />
+          <span>预览与导出</span>
+        </button>
+      </div>
+
       <div id="toolbar" className="floating-panel">
         {TOOL_GROUPS.map((group) => (
           <div key={group.name} className="tool-group">
@@ -343,6 +511,14 @@ export default function App() {
           </button>
         </div>
       </div>
+
+      {previewData && (
+        <PreviewModal
+          data={previewData}
+          board={board}
+          onClose={() => setPreviewData(null)}
+        />
+      )}
     </>
   );
 }

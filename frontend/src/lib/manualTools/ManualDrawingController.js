@@ -54,13 +54,23 @@ function createInitialState() {
   };
 }
 
+function getBoundingSelection(vertices) {
+  return {
+    xmin: Math.min(...vertices.map((vertex) => vertex.x)),
+    xmax: Math.max(...vertices.map((vertex) => vertex.x)),
+    ymin: Math.min(...vertices.map((vertex) => vertex.y)),
+    ymax: Math.max(...vertices.map((vertex) => vertex.y))
+  };
+}
+
 export class ManualDrawingController {
-  constructor({ board, engine, registry, onStatusChange, onToolChange }) {
+  constructor({ board, engine, registry, onStatusChange, onToolChange, onPreviewSelect }) {
     this.board = board;
     this.engine = engine;
     this.registry = registry;
     this.onStatusChange = onStatusChange;
     this.onToolChange = onToolChange;
+    this.onPreviewSelect = onPreviewSelect;
     this.activeTool = TOOLS.SELECT;
     this.state = createInitialState();
     this.idCounter = 0;
@@ -161,6 +171,7 @@ export class ManualDrawingController {
       case TOOLS.CIRCLE:
       case TOOLS.RECTANGLE:
       case TOOLS.TRIANGLE:
+      case TOOLS.PREVIEW:
         this.state.dragStart = this.getMousePosition(event);
         this.onStatusChange(this.getDragStatus());
         return;
@@ -243,6 +254,11 @@ export class ManualDrawingController {
 
     if (this.activeTool === TOOLS.TRIANGLE) {
       this.updatePolygonPreview(buildIsoscelesTriangleVertices(this.state.dragStart, end, event.shiftKey));
+      return;
+    }
+
+    if (this.activeTool === TOOLS.PREVIEW) {
+      this.updatePolygonPreview(buildRectangleVertices(this.state.dragStart, end, false));
     }
   }
 
@@ -286,6 +302,16 @@ export class ManualDrawingController {
       if (definition.valid) {
         this.createPolygonFromVertices(definition.vertices, 'triangle');
         this.completeAndReturn(event.shiftKey ? '等边三角形绘制完成' : '等腰三角形绘制完成');
+        return;
+      }
+    }
+
+    if (this.activeTool === TOOLS.PREVIEW) {
+      const definition = buildRectangleVertices(this.state.dragStart, end, false);
+      if (definition.valid) {
+        this.clearPreview();
+        this.onPreviewSelect?.(getBoundingSelection(definition.vertices));
+        this.completeAndReturn('选区已完成', { forceSelect: true });
         return;
       }
     }
@@ -533,6 +559,11 @@ export class ManualDrawingController {
       return;
     }
 
+    if (!definition.valid || definition.vertices.length === 0) {
+      this.clearPreview();
+      return;
+    }
+
     if (!this.state.previewShape) {
       const previewPoints = definition.vertices.map((vertex) => this.board.create('point', [vertex.x, vertex.y], HIDDEN_PREVIEW_POINT_ATTRS));
       const previewShape = this.board.create('polygon', previewPoints, PREVIEW_ATTRS);
@@ -542,6 +573,9 @@ export class ManualDrawingController {
 
     definition.vertices.forEach((vertex, index) => {
       const previewPoint = this.state.previewPoints[index];
+      if (!previewPoint) {
+        return;
+      }
       previewPoint.setPosition(JXG.COORDS_BY_USER, [vertex.x, vertex.y]);
     });
     this.board.update();
@@ -664,6 +698,8 @@ export class ManualDrawingController {
         return '拖动鼠标绘制矩形，按住 Shift 画正方形';
       case TOOLS.TRIANGLE:
         return '拖动鼠标绘制等腰三角形，按住 Shift 画等边三角形';
+      case TOOLS.PREVIEW:
+        return '拖动鼠标框选预览范围';
       default:
         return '拖动鼠标绘制图形';
     }
