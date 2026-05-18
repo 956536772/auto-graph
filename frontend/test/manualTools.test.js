@@ -3,7 +3,7 @@ import { Buffer } from 'node:buffer';
 import test from 'node:test';
 
 import { ShapeRegistry } from '../src/lib/ShapeRegistry.js';
-import { collectPointLabelOverlays, collectVisibleCircleCenterIds, exportBoardPreviewSvg } from '../src/lib/previewExport.js';
+import { collectPointLabelOverlays, collectVisibleCircleCenterIds, collectVisibleCirclePointIds, collectVisibleExplicitPointIds, exportBoardPreviewSvg } from '../src/lib/previewExport.js';
 import { TOOLS } from '../src/lib/manualTools/constants.js';
 import {
   buildCircleDefinition,
@@ -15,11 +15,13 @@ import {
 import {
   chooseTargetFromElements,
   getCircleSnapDistancePx,
+  isCirclePathElement,
   isWithinSnapRadius,
   PATH_SNAP_RADIUS_PX,
   preferPointSnapTarget,
   shouldUseSnapping
 } from '../src/lib/manualTools/selection.js';
+import { createBoardPanDragGuard } from '../src/lib/manualTools/panDragGuard.js';
 
 class FakeSvgElement {
   constructor(tagName, textContent = '') {
@@ -98,6 +100,21 @@ class FakeSvgElement {
 globalThis.DOMParser = class {
   parseFromString(svgString) {
     const root = new FakeSvgElement('svg');
+    const parseAttributes = (attrsText) => Object.fromEntries(
+      Array.from(attrsText.matchAll(/([a-zA-Z:-]+)="([^"]*)"/g)).map(([, name, value]) => [name, value])
+    );
+
+    for (const tagName of ['circle', 'line', 'path', 'polygon', 'ellipse']) {
+      const elementMatches = svgString.matchAll(new RegExp(`<${tagName}\\b([^>]*)\\/?>\\s*(?:<\\/${tagName}>)?`, 'g'));
+      for (const match of elementMatches) {
+        const element = new FakeSvgElement(tagName);
+        Object.entries(parseAttributes(match[1])).forEach(([name, value]) => {
+          element.setAttribute(name, value);
+        });
+        root.appendChild(element);
+      }
+    }
+
     const textMatches = svgString.matchAll(/<text[^>]*>(.*?)<\/text>/g);
     for (const match of textMatches) {
       root.appendChild(new FakeSvgElement('text', match[1]));
@@ -122,6 +139,28 @@ globalThis.TextDecoder = globalThis.TextDecoder || (await import('node:util')).T
 
 function createObject(id) {
   return { id };
+}
+
+function createPoint(label, x = 0, y = 0) {
+  return {
+    elType: 'point',
+    name: label,
+    hasLabel: Boolean(label),
+    label: { setAttribute() {}, on() {} },
+    X: () => x,
+    Y: () => y,
+    getName() {
+      return this.name || '';
+    },
+    setName(nextName) {
+      this.name = nextName || '';
+    },
+    setAttribute(attrs = {}) {
+      if (Object.hasOwn(attrs, 'name')) this.name = attrs.name || '';
+      if (Object.hasOwn(attrs, 'withLabel')) this.hasLabel = attrs.withLabel;
+    },
+    on() {}
+  };
 }
 
 test('ShapeRegistry keeps batched registrations in one undo step', () => {
@@ -196,6 +235,23 @@ test('ShapeRegistry records delete as an undoable and redoable action', () => {
   assert.equal(registry.redo(board), 'B');
   assert.deepEqual(registry.history, ['A', 'C']);
   assert.equal(registry.exists('B'), false);
+});
+
+test('ShapeRegistry removes objects by registry id for AI delete instructions', () => {
+  const registry = new ShapeRegistry();
+  const object = { elType: 'point' };
+  const removed = [];
+  const board = {
+    removeObject(target) {
+      removed.push(target);
+    }
+  };
+
+  registry.register('A', object);
+
+  assert.equal(registry.removeById(board, 'A'), 'A');
+  assert.deepEqual(removed, [object]);
+  assert.equal(registry.exists('A'), false);
 });
 
 test('ShapeRegistry snapshot actions support label and move undo redo', () => {
@@ -301,6 +357,98 @@ test('ShapeRegistry snapshots preserve derived line construction parents', () =>
 
   assert.equal(registry.removeObject(board, registry.get('SEG')), 'SEG');
   assert.equal(registry.exists('PAR'), false);
+});
+
+test('ShapeRegistry serializes and deletes generated line description points with their line', () => {
+  const registry = new ShapeRegistry();
+  const removed = [];
+  const board = {
+    removeObject(object) {
+      removed.push(object.registryId);
+    }
+  };
+  const pointA = createPoint('A', 0, 0);
+  const pointB = createPoint('B', 4, 0);
+  const pointP = createPoint('P', 1, 2);
+  const segment = { elType: 'segment', point1: pointA, point2: pointB, on() {} };
+  const parallel = {
+    elType: 'parallel',
+    parents: [segment, pointP],
+    meta: {
+      historyAction: 'parallel',
+      historyParentIds: ['AB', 'P'],
+      descriptionPointId: 'parallel_P_AB_point'
+    }
+  };
+  const descriptionPoint = {
+    elType: 'glider',
+    slideObject: parallel,
+    X: () => 2,
+    Y: () => 3,
+    getName: () => 'C',
+    meta: {
+      generatedLinePointFor: 'parallel_P_AB'
+    }
+  };
+
+  registry.register('A', pointA);
+  registry.register('B', pointB);
+  registry.register('AB', segment);
+  registry.register('P', pointP);
+  registry.register('parallel_P_AB', parallel);
+  registry.register('parallel_P_AB_point', descriptionPoint);
+
+  assert.equal(parallel.meta.descriptionPointId, 'parallel_P_AB_point');
+  assert.equal(descriptionPoint.elType, 'glider');
+  assert.equal(descriptionPoint.meta.generatedLinePointFor, 'parallel_P_AB');
+  assert.equal(descriptionPoint.slideObject, parallel);
+  assert.equal(descriptionPoint.getName(), 'C');
+
+  const serializedPoint = registry.serialize().find((entry) => entry.id === 'parallel_P_AB_point');
+  assert.equal(serializedPoint.type, 'glider');
+  assert.equal(serializedPoint.label, 'C');
+  assert.deepEqual(serializedPoint.coords, [2, 3]);
+
+  assert.equal(registry.removeObject(board, parallel), 'parallel_P_AB');
+  assert.equal(registry.exists('parallel_P_AB'), false);
+  assert.equal(registry.exists('parallel_P_AB_point'), false);
+  assert.deepEqual(new Set(removed), new Set(['parallel_P_AB', 'parallel_P_AB_point']));
+});
+
+test('ShapeRegistry does not require generated description points for ordinary tangents', () => {
+  const registry = new ShapeRegistry();
+  const removed = [];
+  const board = {
+    removeObject(object) {
+      removed.push(object.registryId);
+    }
+  };
+  const circle = { elType: 'circle' };
+  const tangentPoint = {
+    elType: 'glider',
+    slideObject: circle,
+    X: () => 1,
+    Y: () => 2,
+    getName: () => ''
+  };
+  const tangent = {
+    elType: 'tangent',
+    parents: [circle, tangentPoint],
+    meta: {
+      historyAction: 'tangent',
+      historyParentIds: ['circle_o', 'touch_1']
+    }
+  };
+
+  registry.register('circle_o', circle);
+  registry.register('touch_1', tangentPoint);
+  registry.register('tangent_1', tangent);
+
+  assert.deepEqual(registry.getDirectOwnedIds(tangent), []);
+  assert.equal(registry.removeObject(board, tangent), 'tangent_1');
+  assert.equal(registry.exists('tangent_1'), false);
+  assert.equal(registry.exists('touch_1'), true);
+  assert.deepEqual(removed, ['tangent_1']);
 });
 
 test('ShapeRegistry removes dependent geometry when deleting a point', () => {
@@ -533,6 +681,49 @@ test('ShapeRegistry removes a circle when deleting its registered center point',
   assert.deepEqual(registry.history, []);
 });
 
+test('ShapeRegistry removes circle gliders when deleting their path circle', () => {
+  const registry = new ShapeRegistry();
+  const removed = [];
+  const board = {
+    removeObject(object) {
+      removed.push(object.registryId);
+    }
+  };
+  const circle = { elType: 'circle' };
+  const glider = { elType: 'glider', slideObject: circle };
+
+  registry.register('CIRCLE', circle);
+  registry.register('P', glider);
+
+  assert.equal(registry.removeObject(board, circle), 'CIRCLE');
+  assert.deepEqual(removed, ['P', 'CIRCLE']);
+  assert.deepEqual(registry.history, []);
+});
+
+test('ShapeRegistry serializes generated derived circle centers as reusable points', () => {
+  const registry = new ShapeRegistry();
+  const center = {
+    elType: 'circumcenter',
+    meta: { generatedCircleCenterFor: 'circumcircle_ABC' },
+    getName: () => 'O',
+    X: () => 0.5,
+    Y: () => -0.5
+  };
+
+  registry.register('circumcircle_ABC_center', center);
+
+  assert.deepEqual(registry.serialize(), [
+    {
+      id: 'circumcircle_ABC_center',
+      type: 'point',
+      order: 0,
+      label: 'O',
+      position: { x: 0.5, y: -0.5 },
+      coords: [0.5, -0.5]
+    }
+  ]);
+});
+
 test('drag-created polygons include the same selectable edge affordances as closed segment chains', () => {
   let idCounter = 0;
   const instructions = buildPolygonInstructionsFromVertices([
@@ -619,6 +810,48 @@ test('chooseTargetFromElements ignores visible unregistered auxiliary points', (
   assert.equal(chooseTargetFromElements([auxiliaryPoint, registeredPoint], registry).obj, registeredPoint);
 });
 
+test('chooseTargetFromElements treats AI-generated circles as selectable paths', () => {
+  const registry = new ShapeRegistry();
+  const circumcircle = {
+    elType: 'circumcircle',
+    visProp: { visible: true }
+  };
+  registry.register('CIRCUMCIRCLE', circumcircle);
+
+  const target = chooseTargetFromElements([circumcircle], registry);
+
+  assert.equal(target.type, 'path');
+  assert.equal(target.obj, circumcircle);
+});
+
+test('chooseTargetFromElements treats AI-generated point constructions as selectable points', () => {
+  const registry = new ShapeRegistry();
+  const midpoint = {
+    elType: 'midpoint',
+    visProp: { visible: true }
+  };
+  registry.register('MIDPOINT', midpoint);
+
+  const target = chooseTargetFromElements([midpoint], registry);
+
+  assert.equal(target.type, 'point');
+  assert.equal(target.obj, midpoint);
+});
+
+test('chooseTargetFromElements treats AI-generated function graphs as selectable paths', () => {
+  const registry = new ShapeRegistry();
+  const functionGraph = {
+    elType: 'functiongraph',
+    visProp: { visible: true }
+  };
+  registry.register('GRAPH', functionGraph);
+
+  const target = chooseTargetFromElements([functionGraph], registry);
+
+  assert.equal(target.type, 'path');
+  assert.equal(target.obj, functionGraph);
+});
+
 test('preferPointSnapTarget keeps points ahead of path hits', () => {
   const point = {
     elType: 'point',
@@ -656,6 +889,22 @@ test('getCircleSnapDistancePx measures distance to circumference instead of circ
   assert.equal(getCircleSnapDistancePx(circle, { x: 5.8, y: 0 }, toScreenCoords), 8);
 });
 
+test('getCircleSnapDistancePx supports AI-generated circle path types', () => {
+  const circleBase = {
+    center: {
+      X: () => 0,
+      Y: () => 0
+    },
+    Radius: () => 5
+  };
+  const toScreenCoords = (coords) => ({ x: coords.x * 10, y: coords.y * 10 });
+
+  assert.equal(isCirclePathElement({ ...circleBase, elType: 'circumcircle' }), true);
+  assert.equal(isCirclePathElement({ ...circleBase, elType: 'incircle' }), true);
+  assert.equal(getCircleSnapDistancePx({ ...circleBase, elType: 'circumcircle' }, { x: 5, y: 0 }, toScreenCoords), 0);
+  assert.equal(getCircleSnapDistancePx({ ...circleBase, elType: 'incircle' }, { x: 5.8, y: 0 }, toScreenCoords), 8);
+});
+
 test('shouldUseSnapping disables all snapping while Shift is held', () => {
   assert.equal(shouldUseSnapping({ shiftKey: false }), true);
   assert.equal(shouldUseSnapping({ shiftKey: true }), false);
@@ -680,6 +929,41 @@ test('circle interior hits stay outside path snap radius so inner dragging can r
   const interiorDistance = getCircleSnapDistancePx(circle, { x: 0, y: 0 }, toScreenCoords);
 
   assert.equal(isWithinSnapRadius(interiorDistance, PATH_SNAP_RADIUS_PX), false);
+});
+
+test('pan drag guard restores board pan after window-level release events', () => {
+  const listeners = new Map();
+  const panStates = [];
+  const board = {
+    options: { pan: { enabled: true } },
+    setAttribute(attrs) {
+      const nextPan = attrs.pan.enabled;
+      panStates.push(nextPan);
+      this.options.pan.enabled = nextPan;
+    }
+  };
+  const targetWindow = {
+    addEventListener(eventName, listener) {
+      listeners.set(eventName, listener);
+    },
+    removeEventListener(eventName, listener) {
+      if (listeners.get(eventName) === listener) {
+        listeners.delete(eventName);
+      }
+    }
+  };
+
+  const guard = createBoardPanDragGuard(board, () => targetWindow);
+  guard.start();
+
+  assert.equal(board.options.pan.enabled, false);
+  assert.equal(typeof listeners.get('pointerup'), 'function');
+
+  listeners.get('pointerup')();
+
+  assert.equal(board.options.pan.enabled, true);
+  assert.deepEqual(panStates, [false, true]);
+  assert.equal(listeners.size, 0);
 });
 
 test('collectPointLabelOverlays captures visible point labels for preview export', () => {
@@ -764,6 +1048,15 @@ test('collectVisibleCircleCenterIds only keeps centers with visible label text f
     getName: () => 'A',
     label: { visPropCalc: { visible: true } }
   };
+  const generatedCircumcenter = {
+    id: 'circumcenter_labeled',
+    elType: 'circumcenter',
+    hasLabel: false,
+    meta: { generatedCircleCenterFor: 'circumcircle_ABC' },
+    visPropCalc: { visible: true },
+    getName: () => 'O',
+    label: { visPropCalc: { visible: true } }
+  };
 
   const board = {
     objects: {
@@ -771,13 +1064,136 @@ test('collectVisibleCircleCenterIds only keeps centers with visible label text f
       unlabeledCenter,
       hiddenLabelCenter,
       ordinaryPoint,
+      generatedCircumcenter,
       circleA: { elType: 'circle', center: labeledCenter },
       circleB: { elType: 'circle', center: unlabeledCenter },
-      circleC: { elType: 'circle', center: hiddenLabelCenter }
+      circleC: { elType: 'circle', center: hiddenLabelCenter },
+      circumcircleABC: { elType: 'circumcircle', center: generatedCircumcenter }
     }
   };
 
-  assert.deepEqual(collectVisibleCircleCenterIds(board), ['center_labeled']);
+  assert.deepEqual(collectVisibleCircleCenterIds(board), ['center_labeled', 'circumcenter_labeled']);
+});
+
+test('collectPointLabelOverlays captures generated derived circle center labels', () => {
+  const generatedCircumcenter = {
+    id: 'circumcenter_labeled',
+    elType: 'circumcenter',
+    hasLabel: false,
+    meta: { generatedCircleCenterFor: 'circumcircle_ABC' },
+    visPropCalc: { visible: true },
+    getName: () => 'O',
+    X: () => 0.5,
+    Y: () => -0.5,
+    label: {
+      visPropCalc: { visible: true },
+      visProp: { fontsize: '16' },
+      coords: { scrCoords: [1, 150, 90] }
+    }
+  };
+  const board = {
+    objects: {
+      generatedCircumcenter,
+      circumcircleABC: { elType: 'circumcircle', center: generatedCircumcenter }
+    }
+  };
+
+  assert.deepEqual(collectPointLabelOverlays(board), [
+    { text: 'O', x: 150, y: 90, anchorX: 0.5, anchorY: -0.5, fontSize: 16 }
+  ]);
+});
+
+test('collectVisibleCirclePointIds only keeps visible gliders on circle paths', () => {
+  const circle = { elType: 'circle' };
+  const circumcircle = { elType: 'circumcircle' };
+  const segment = { elType: 'segment' };
+  const circleGlider = {
+    id: 'circle_glider',
+    elType: 'glider',
+    visPropCalc: { visible: true },
+    slideObject: circle
+  };
+  const circumcircleGlider = {
+    id: 'circumcircle_glider',
+    elType: 'glider',
+    visPropCalc: { visible: true },
+    path: circumcircle
+  };
+  const hiddenCircleGlider = {
+    id: 'hidden_circle_glider',
+    elType: 'glider',
+    visPropCalc: { visible: false },
+    slideObject: circle
+  };
+  const segmentGlider = {
+    id: 'segment_glider',
+    elType: 'glider',
+    visPropCalc: { visible: true },
+    slideObject: segment
+  };
+  const freePoint = {
+    id: 'free_point',
+    elType: 'point',
+    visPropCalc: { visible: true }
+  };
+
+  const board = {
+    objects: {
+      circle,
+      circumcircle,
+      segment,
+      circleGlider,
+      circumcircleGlider,
+      hiddenCircleGlider,
+      segmentGlider,
+      freePoint
+    }
+  };
+
+  assert.deepEqual(collectVisibleCirclePointIds(board), ['circle_glider', 'circumcircle_glider']);
+});
+
+test('collectVisibleExplicitPointIds keeps visible registered points for preview markers', () => {
+  const polygonVertex = {
+    id: 'polygon_vertex',
+    registryId: 'V',
+    elType: 'point',
+    visPropCalc: { visible: true }
+  };
+  const board = {
+    objects: {
+      explicitPoint: {
+        id: 'explicit_point',
+        registryId: 'P',
+        elType: 'point',
+        visPropCalc: { visible: true }
+      },
+      explicitGlider: {
+        id: 'explicit_glider',
+        registryId: 'Q',
+        elType: 'glider',
+        visPropCalc: { visible: true }
+      },
+      hiddenPoint: {
+        id: 'hidden_point',
+        registryId: 'H',
+        elType: 'point',
+        visPropCalc: { visible: false }
+      },
+      auxiliaryPoint: {
+        id: 'auxiliary_point',
+        elType: 'point',
+        visPropCalc: { visible: true }
+      },
+      polygonVertex,
+      polygon: {
+        elType: 'polygon',
+        vertices: [polygonVertex]
+      }
+    }
+  };
+
+  assert.deepEqual(collectVisibleExplicitPointIds(board), ['explicit_point', 'explicit_glider']);
 });
 
 test('exportBoardPreviewSvg restores board text display after successful export', () => {
@@ -806,6 +1222,174 @@ test('exportBoardPreviewSvg restores board text display after successful export'
   assert.match(result, /<svg/);
   assert.deepEqual(displays, ['internal', 'html']);
   assert.equal(board.options.text.display, 'html');
+});
+
+test('exportBoardPreviewSvg renders explicit points and circle gliders as small markers', () => {
+  const rawSvg = [
+    '<svg xmlns="http://www.w3.org/2000/svg">',
+    '<circle id="jxg_circle_glider" fill="red" stroke="red" r="5"></circle>',
+    '<circle id="jxg_free_point" fill="red" stroke="red" r="5"></circle>',
+    '<circle id="jxg_ai_point_result" fill="none" stroke="red" r="5"></circle>',
+    '<circle id="jxg_ai_midpoint_result" fill="none" stroke="red" r="5"></circle>',
+    '<circle id="jxg_auxiliary_point" fill="red" stroke="red" r="5"></circle>',
+    '<circle id="jxg_polygon_vertex" fill="red" stroke="red" r="5"></circle>',
+    '</svg>'
+  ].join('');
+  const circle = { elType: 'circle' };
+  const polygonVertex = {
+    id: 'polygon_vertex',
+    registryId: 'V',
+    elType: 'point',
+    visPropCalc: { visible: true }
+  };
+  const board = {
+    objects: {
+      circle,
+      circleGlider: {
+        id: 'circle_glider',
+        elType: 'glider',
+        visPropCalc: { visible: true },
+        slideObject: circle
+      },
+      freePoint: {
+        id: 'free_point',
+        registryId: 'P',
+        elType: 'point',
+        visPropCalc: { visible: true }
+      },
+      aiPoint: {
+        id: 'jxg123',
+        registryId: 'ai_point_result',
+        elType: 'point',
+        visPropCalc: { visible: true }
+      },
+      aiMidpoint: {
+        id: 'midpoint_internal',
+        registryId: 'ai_midpoint_result',
+        elType: 'midpoint',
+        visPropCalc: { visible: true }
+      },
+      auxiliaryPoint: {
+        id: 'auxiliary_point',
+        elType: 'point',
+        visPropCalc: { visible: true }
+      },
+      polygonVertex,
+      polygon: {
+        elType: 'polygon',
+        vertices: [polygonVertex]
+      }
+    },
+    options: { text: { display: 'html' } },
+    origin: { scrCoords: [1, 0, 100] },
+    unitX: 10,
+    unitY: 10,
+    renderer: {
+      dumpToDataURI: () => `data:image/svg+xml;base64,${Buffer.from(rawSvg).toString('base64')}`
+    },
+    setAttribute(attrs) {
+      this.options.text.display = attrs.text.display;
+    },
+    update() {}
+  };
+
+  const result = exportBoardPreviewSvg({
+    board,
+    selection: { xmin: 0, xmax: 10, ymin: 0, ymax: 10 }
+  });
+
+  assert.match(result, /id="jxg_circle_glider"/);
+  assert.match(result, /id="jxg_circle_glider" fill="black" stroke="black" r="3" stroke-width="0"/);
+  assert.match(result, /id="jxg_free_point" fill="black" stroke="black" r="3" stroke-width="0"/);
+  assert.match(result, /id="jxg_ai_point_result" fill="black" stroke="black" r="3" stroke-width="0"/);
+  assert.match(result, /id="jxg_ai_midpoint_result" fill="black" stroke="black" r="3" stroke-width="0"/);
+  assert.doesNotMatch(result, /id="jxg_auxiliary_point"/);
+  assert.doesNotMatch(result, /id="jxg_polygon_vertex"/);
+});
+
+test('exportBoardPreviewSvg keeps generated circumcircle center marker and label', () => {
+  const rawSvg = [
+    '<svg xmlns="http://www.w3.org/2000/svg">',
+    '<circle id="jxg_circumcenter_labeled" fill="orange" stroke="orange" r="5"></circle>',
+    '</svg>'
+  ].join('');
+  const generatedCircumcenter = {
+    id: 'circumcenter_labeled',
+    elType: 'circumcenter',
+    hasLabel: false,
+    meta: { generatedCircleCenterFor: 'circumcircle_ABC' },
+    visPropCalc: { visible: true },
+    getName: () => 'O',
+    X: () => 0.5,
+    Y: () => -0.5,
+    label: {
+      visPropCalc: { visible: true },
+      visProp: { fontsize: '16' },
+      coords: { scrCoords: [1, 50, 50] }
+    }
+  };
+  const board = {
+    objects: {
+      generatedCircumcenter,
+      circumcircleABC: { elType: 'circumcircle', center: generatedCircumcenter }
+    },
+    options: { text: { display: 'html' } },
+    origin: { scrCoords: [1, 0, 100] },
+    unitX: 10,
+    unitY: 10,
+    renderer: {
+      dumpToDataURI: () => `data:image/svg+xml;base64,${Buffer.from(rawSvg).toString('base64')}`
+    },
+    setAttribute(attrs) {
+      this.options.text.display = attrs.text.display;
+    },
+    update() {}
+  };
+
+  const result = exportBoardPreviewSvg({
+    board,
+    selection: { xmin: 0, xmax: 10, ymin: -2, ymax: 10 }
+  });
+
+  assert.match(result, /id="jxg_circumcenter_labeled" fill="black" stroke="black" r="3" stroke-width="0"/);
+  assert.match(result, />O<\/text>/);
+});
+
+test('exportBoardPreviewSvg normalizes geometry strokes across circles and polygon edges', () => {
+  const rawSvg = [
+    '<svg xmlns="http://www.w3.org/2000/svg">',
+    '<circle id="jxg_circle" fill="none" stroke="red" stroke-width="1" r="40"></circle>',
+    '<line id="jxg_triangle_edge" stroke="blue" stroke-width="4"></line>',
+    '<path id="jxg_triangle_path" stroke="green" stroke-width="3" fill="none"></path>',
+    '</svg>'
+  ].join('');
+  const board = {
+    objects: {
+      circle: { id: 'circle', registryId: 'CIRCLE', elType: 'circle' },
+      triangleEdge: { id: 'triangle_edge', registryId: 'EDGE', elType: 'segment' },
+      trianglePath: { id: 'triangle_path', registryId: 'TRIANGLE', elType: 'polygon' }
+    },
+    options: { text: { display: 'html' } },
+    origin: { scrCoords: [1, 0, 100] },
+    unitX: 10,
+    unitY: 10,
+    renderer: {
+      dumpToDataURI: () => `data:image/svg+xml;base64,${Buffer.from(rawSvg).toString('base64')}`
+    },
+    setAttribute(attrs) {
+      this.options.text.display = attrs.text.display;
+    },
+    update() {}
+  };
+
+  const result = exportBoardPreviewSvg({
+    board,
+    selection: { xmin: 0, xmax: 10, ymin: 0, ymax: 10 }
+  });
+
+  assert.match(result, /id="jxg_circle" fill="none" stroke="black" stroke-width="2"/);
+  assert.match(result, /id="jxg_triangle_edge" stroke="black" stroke-width="2"/);
+  assert.match(result, /id="jxg_triangle_path" stroke="black" stroke-width="2" fill="none"/);
 });
 
 test('exportBoardPreviewSvg restores board text display when SVG export fails', () => {

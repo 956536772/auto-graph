@@ -117,6 +117,10 @@ export class ShapeRegistry {
         });
         return removedId;
     }
+    removeById(board, id) {
+        if (!id) return null;
+        return this.removeObject(board, this.shapes.get(id));
+    }
     collectOwnedIds(rootIds) {
         const ids = new Set(rootIds);
         let changed = true;
@@ -158,6 +162,13 @@ export class ShapeRegistry {
             }
         }
 
+        if (this.isLineLike(obj) && obj.meta?.descriptionPointId) {
+            const descriptionPoint = this.shapes.get(obj.meta.descriptionPointId);
+            if (descriptionPoint?.meta?.generatedLinePointFor === obj.registryId) {
+                ids.push(obj.meta.descriptionPointId);
+            }
+        }
+
         return ids.filter((id) => this.shapes.has(id));
     }
     collectDependentIds(rootIds) {
@@ -183,6 +194,7 @@ export class ShapeRegistry {
         if (!obj || !target) return false;
         if (this.isGeneratedCenterForCircle(target, obj)) return false;
         if (obj.point1 === target || obj.point2 === target || obj.point3 === target) return true;
+        if (this.getGliderPath(obj) === target) return true;
         if (obj.center === target || obj.radiuspoint === target) return true;
         if (Array.isArray(obj.vertices) && obj.vertices.includes(target)) return true;
         if (Array.isArray(obj.parents) && obj.parents.includes(target)) return true;
@@ -238,13 +250,20 @@ export class ShapeRegistry {
         return obj?.elType === 'circumcircle' || obj?.elType === 'incircle';
     }
     isPreservableGeneratedCenterPoint(obj) {
-        return (
-            (obj?.elType === 'point' || obj?.elType === 'glider') &&
-            Boolean(obj.meta?.generatedCircleCenterFor)
-        );
+        return this.isPointLike(obj) && Boolean(obj.meta?.generatedCircleCenterFor);
+    }
+    isPointLike(obj) {
+        return obj?.elType === 'point' || obj?.elType === 'glider' || Boolean(obj?.meta?.generatedCircleCenterFor);
     }
     isCircleLike(obj) {
         return obj?.elType === 'circle' || obj?.elType === 'circumcircle' || obj?.elType === 'incircle';
+    }
+    isLineLike(obj) {
+        const type = obj?.meta?.historyAction || obj?.elType;
+        return type === 'line' || type === 'parallel' || type === 'perpendicular' || type === 'tangent' || type === 'bisector';
+    }
+    getGliderPath(obj) {
+        return obj?.slideObject || obj?.path || obj?.onPolygon || null;
     }
     isGeneratedCenterForCircle(target, obj) {
         return (
@@ -354,7 +373,7 @@ export class ShapeRegistry {
         }
 
         if (obj.elType === 'glider') {
-            const pathId = this.idForObject(obj.slideObject || obj.path || obj.onPolygon);
+            const pathId = this.idForObject(this.getGliderPath(obj));
             if (pathId) base.pathId = pathId;
         }
 
@@ -475,14 +494,14 @@ export class ShapeRegistry {
             .filter(Boolean);
     }
     serializeObject(id, obj, order) {
-        const data = { id, type: obj.elType, order };
+        const data = { id, type: this.serializedType(obj), order };
         const label = this.getLabel(obj);
         if (label) data.label = label;
 
         const anchor = this.getAnchor(obj);
         if (anchor) data.position = anchor;
 
-        if ((obj.elType === 'point' || obj.elType === 'glider') && typeof obj.X === 'function' && typeof obj.Y === 'function') {
+        if (this.isPointLike(obj) && typeof obj.X === 'function' && typeof obj.Y === 'function') {
             data.coords = [obj.X(), obj.Y()];
         }
 
@@ -530,6 +549,12 @@ export class ShapeRegistry {
         }
 
         return data;
+    }
+    serializedType(obj) {
+        if (obj?.meta?.generatedCircleCenterFor) {
+            return 'point';
+        }
+        return obj?.elType;
     }
     getLabel(obj) {
         if (!obj) return '';

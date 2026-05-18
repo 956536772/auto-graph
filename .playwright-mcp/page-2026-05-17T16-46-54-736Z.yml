@@ -1,0 +1,68 @@
+- generic [ref=e2]:
+  - region [ref=e3]:
+    - img [ref=e4]
+    - generic [ref=e7] [cursor=pointer]: –o+←↓↑→
+  - button "预览与导出" [ref=e9] [cursor=pointer]:
+    - img [ref=e10]
+    - generic [ref=e13]: 预览与导出
+  - generic [ref=e14]:
+    - generic [ref=e15]:
+      - generic [ref=e16]: 基础
+      - generic [ref=e17]:
+        - button "选择" [pressed] [ref=e18] [cursor=pointer]:
+          - img [ref=e19]
+        - button "点" [ref=e22] [cursor=pointer]:
+          - img [ref=e23]
+        - button "线段" [ref=e25] [cursor=pointer]:
+          - img [ref=e26]
+        - button "圆" [ref=e29] [cursor=pointer]:
+          - img [ref=e30]
+        - button "矩形/正方形" [ref=e32] [cursor=pointer]:
+          - generic [ref=e33]: ▭
+        - button "等腰/等边三角形" [ref=e34] [cursor=pointer]:
+          - generic [ref=e35]: △
+    - generic [ref=e36]:
+      - generic [ref=e37]: 构造
+      - generic [ref=e38]:
+        - button "点标签" [ref=e39] [cursor=pointer]:
+          - generic [ref=e40]: A
+        - button "角标记" [ref=e41] [cursor=pointer]:
+          - generic [ref=e42]: ∠
+        - button "中点" [ref=e43] [cursor=pointer]:
+          - generic [ref=e44]: M
+        - button "平行" [ref=e45] [cursor=pointer]:
+          - generic [ref=e46]: ∥
+        - button "垂直" [ref=e47] [cursor=pointer]:
+          - generic [ref=e48]: ⊥
+        - button "角平分线" [ref=e49] [cursor=pointer]:
+          - generic [ref=e50]: ∠/
+    - generic [ref=e51]:
+      - generic [ref=e52]: 历史
+      - generic [ref=e53]:
+        - button "撤销" [ref=e54] [cursor=pointer]:
+          - img [ref=e55]
+        - button "重做" [ref=e58] [cursor=pointer]:
+          - img [ref=e59]
+        - button "清空" [ref=e62] [cursor=pointer]:
+          - img [ref=e63]
+  - generic [ref=e68]: 就绪 - 请在右侧输入绘图需求
+  - generic [ref=e69]:
+    - generic [ref=e70]: 当前工具
+    - strong [ref=e71]: 选择
+    - paragraph [ref=e72]: 选择对象；右键对象打开删除菜单，拖动画布可平移。
+    - generic [ref=e73]:
+      - generic [ref=e74]: Esc 取消
+      - generic [ref=e75]: Shift 约束
+  - generic "画布视图控制" [ref=e76]:
+    - button "放大" [ref=e77] [cursor=pointer]: +
+    - button "缩小" [ref=e78] [cursor=pointer]: −
+    - button "复位视图" [ref=e79] [cursor=pointer]: 复位
+  - generic [ref=e80]:
+    - generic [ref=e81]:
+      - generic [ref=e82]: AI 几何助手
+      - generic [ref=e83]: 自然语言生成几何构造
+    - generic [ref=e86]: 你好！我是你的几何助手。你可以让我画三角形、作外接圆/内切圆、过圆上一点作切线，或求两圆交点。
+    - generic [ref=e89]:
+      - textbox "描述题目意图... 支持 Shift+Enter 换行 / 粘贴图片" [ref=e90]
+      - button "发送" [disabled] [ref=e91]
+      - generic "添加图片" [ref=e92] [cursor=pointer]: ＋

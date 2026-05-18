@@ -16,6 +16,7 @@ final class GeometryInstructionExpander {
         "point_on_circle",
         "parallel_through_point_to_segment",
         "perpendicular_through_point_to_segment",
+        "tangents_from_point_to_circle",
         "perpendicular_foot_segment",
         "angle_bisector_segment",
         "divide_segment",
@@ -56,6 +57,9 @@ final class GeometryInstructionExpander {
         if (instruction == null || instruction.action() == null) {
             return StepExpansion.invalid("unsupported_action");
         }
+        if ("delete_object".equals(instruction.action())) {
+            return StepExpansion.ok(List.of(instruction), List.of());
+        }
         if (GeometryCapabilityContract.isSupportedBaseAction(instruction.action())) {
             return state.addBase(instruction);
         }
@@ -70,6 +74,7 @@ final class GeometryInstructionExpander {
             case "point_on_circle" -> pointOnCircle(instruction, state);
             case "parallel_through_point_to_segment" -> lineThroughPointToSegment(instruction, state, "parallel");
             case "perpendicular_through_point_to_segment" -> lineThroughPointToSegment(instruction, state, "perpendicular");
+            case "tangents_from_point_to_circle" -> tangentsFromPointToCircle(instruction, state);
             case "perpendicular_foot_segment" -> perpendicularFootSegment(instruction, state);
             case "angle_bisector_segment" -> angleBisectorSegment(instruction, state);
             case "divide_segment" -> divideSegment(instruction, state);
@@ -89,7 +94,7 @@ final class GeometryInstructionExpander {
         if (p1 == null || p2 == null) {
             return StepExpansion.invalid("missing_required_param");
         }
-        return state.addBase(new DrawingInstruction("segment", Map.of("p1", p1, "p2", p2), instruction.resultId(), null));
+        return state.addBase(new DrawingInstruction("line", Map.of("p1", p1, "p2", p2), instruction.resultId(), null));
     }
 
     private static StepExpansion pointOnSegment(DrawingInstruction instruction, ExpansionState state) {
@@ -126,10 +131,15 @@ final class GeometryInstructionExpander {
             return StepExpansion.invalid("missing_required_param");
         }
         var angle = numberParam(params, "angle").orElse(DEFAULT_CIRCLE_ANGLE);
-        return state.addBase(placePoint(
-            instruction,
-            circle.center().x() + circle.radius() * Math.cos(angle),
-            circle.center().y() + circle.radius() * Math.sin(angle)
+        return state.addBase(new DrawingInstruction(
+            "glider",
+            Map.of(
+                "x", circle.center().x() + circle.radius() * Math.cos(angle),
+                "y", circle.center().y() + circle.radius() * Math.sin(angle),
+                "path", stringParam(params, "circle").orElse("")
+            ),
+            instruction.resultId(),
+            instruction.label()
         ));
     }
 
@@ -141,6 +151,69 @@ final class GeometryInstructionExpander {
             return StepExpansion.invalid("missing_required_param");
         }
         return state.addBase(new DrawingInstruction(action, Map.of("line", segment, "point", point), instruction.resultId(), null));
+    }
+
+    private static StepExpansion tangentsFromPointToCircle(DrawingInstruction instruction, ExpansionState state) {
+        var params = params(instruction);
+        var pointRef = stringParam(params, "point").orElse(null);
+        var circleRef = stringParam(params, "circle").orElse(null);
+        var point = state.anchor(pointRef).orElse(null);
+        var circle = state.circle(circleRef).orElse(null);
+        if (pointRef == null || circleRef == null || point == null || circle == null || circle.center() == null || circle.radius() == null) {
+            return StepExpansion.invalid("missing_required_param");
+        }
+
+        var dx = point.x() - circle.center().x();
+        var dy = point.y() - circle.center().y();
+        var distanceSquared = dx * dx + dy * dy;
+        var radiusSquared = circle.radius() * circle.radius();
+        if (Math.abs(distanceSquared - radiusSquared) <= 0.000001d) {
+            var tangentParams = new HashMap<>(params);
+            tangentParams.put("circle", circleRef);
+            tangentParams.put("point", pointRef);
+            return state.addBase(new DrawingInstruction("tangent", tangentParams, instruction.resultId(), instruction.label()));
+        }
+        if (distanceSquared < radiusSquared) {
+            return StepExpansion.invalid("invalid_geometry");
+        }
+
+        var distance = Math.sqrt(distanceSquared);
+        var baseAngle = Math.atan2(dy, dx);
+        var offset = Math.acos(circle.radius() / distance);
+        var labels = stringListParam(params, "labels");
+        var output = new ArrayList<DrawingInstruction>();
+
+        for (var index = 0; index < 2; index++) {
+            var angle = baseAngle + (index == 0 ? offset : -offset);
+            var label = index < labels.size() ? labels.get(index) : null;
+            var tangentPointId = tangentPointId(instruction, label, index);
+            var tangentPoint = state.addBase(new DrawingInstruction(
+                "glider",
+                Map.of(
+                    "x", round(circle.center().x() + circle.radius() * Math.cos(angle)),
+                    "y", round(circle.center().y() + circle.radius() * Math.sin(angle)),
+                    "path", circleRef
+                ),
+                tangentPointId,
+                label
+            ));
+            if (!tangentPoint.valid()) {
+                return tangentPoint;
+            }
+            output.addAll(tangentPoint.instructions());
+
+            var tangentId = index == 0 ? instruction.resultId() : "%s_2".formatted(instruction.resultId());
+            var tangentParams = new HashMap<String, Object>();
+            tangentParams.put("circle", circleRef);
+            tangentParams.put("point", tangentPointId);
+            var tangent = state.addBase(new DrawingInstruction("tangent", tangentParams, tangentId, null));
+            if (!tangent.valid()) {
+                return tangent;
+            }
+            output.addAll(tangent.instructions());
+        }
+
+        return StepExpansion.ok(output, List.of("已从圆外点近似计算两个切点并作两条切线。"));
     }
 
     private static StepExpansion perpendicularFootSegment(DrawingInstruction instruction, ExpansionState state) {
@@ -485,6 +558,13 @@ final class GeometryInstructionExpander {
         return "%s_%d".formatted(instruction.resultId(), index + 1);
     }
 
+    private static String tangentPointId(DrawingInstruction instruction, String label, int index) {
+        if (label != null && !label.isBlank()) {
+            return label;
+        }
+        return "%s_touch_%d".formatted(instruction.resultId(), index + 1);
+    }
+
     private static Map<String, Object> params(DrawingInstruction instruction) {
         return instruction.params() == null ? Map.of() : instruction.params();
     }
@@ -654,7 +734,7 @@ final class GeometryInstructionExpander {
         static ObjectInfo created(DrawingInstruction instruction, ExpansionState state) {
             var params = params(instruction);
             return switch (instruction.action()) {
-                case "place_point" -> new ObjectInfo(
+                case "place_point", "glider" -> new ObjectInfo(
                     "point",
                     instruction.label(),
                     new Anchor(numberParam(params, "x").orElse(0d), numberParam(params, "y").orElse(0d)),
@@ -662,8 +742,8 @@ final class GeometryInstructionExpander {
                     null,
                     null
                 );
-                case "segment" -> new ObjectInfo(
-                    "segment",
+                case "segment", "line" -> new ObjectInfo(
+                    instruction.action(),
                     instruction.label(),
                     null,
                     null,
@@ -677,7 +757,8 @@ final class GeometryInstructionExpander {
                 case "polygon" -> new ObjectInfo("polygon", instruction.label(), null, null, null, null);
                 case "midpoint", "intersection", "otherintersection" -> new ObjectInfo("point", instruction.label(), null, null, null, null);
                 case "parallel", "perpendicular", "tangent", "bisector" -> new ObjectInfo(instruction.action(), instruction.label(), null, null, null, null);
-                case "circumcircle", "incircle" -> new ObjectInfo(instruction.action(), instruction.label(), null, null, null, null);
+                case "circumcircle" -> circumcircleInfo(instruction, params, state);
+                case "incircle" -> new ObjectInfo(instruction.action(), instruction.label(), null, null, null, null);
                 case "angle" -> new ObjectInfo("angle", instruction.label(), null, null, null, null);
                 default -> new ObjectInfo(instruction.action(), instruction.label(), null, null, null, null);
             };
@@ -696,6 +777,28 @@ final class GeometryInstructionExpander {
                 return new ObjectInfo("circle", instruction.label(), null, center, distance(center, through), null);
             }
             return new ObjectInfo("circle", instruction.label(), null, null, null, null);
+        }
+
+        private static ObjectInfo circumcircleInfo(DrawingInstruction instruction, Map<String, Object> params, ExpansionState state) {
+            var p1 = state.anchor(stringParam(params, "p1").orElse(null)).orElse(null);
+            var p2 = state.anchor(stringParam(params, "p2").orElse(null)).orElse(null);
+            var p3 = state.anchor(stringParam(params, "p3").orElse(null)).orElse(null);
+            if (p1 == null || p2 == null || p3 == null) {
+                return new ObjectInfo("circumcircle", instruction.label(), null, null, null, null);
+            }
+
+            var determinant = 2.0d * (p1.x() * (p2.y() - p3.y()) + p2.x() * (p3.y() - p1.y()) + p3.x() * (p1.y() - p2.y()));
+            if (Math.abs(determinant) < 0.000001d) {
+                return new ObjectInfo("circumcircle", instruction.label(), null, null, null, null);
+            }
+
+            var p1Squared = p1.x() * p1.x() + p1.y() * p1.y();
+            var p2Squared = p2.x() * p2.x() + p2.y() * p2.y();
+            var p3Squared = p3.x() * p3.x() + p3.y() * p3.y();
+            var cx = (p1Squared * (p2.y() - p3.y()) + p2Squared * (p3.y() - p1.y()) + p3Squared * (p1.y() - p2.y())) / determinant;
+            var cy = (p1Squared * (p3.x() - p2.x()) + p2Squared * (p1.x() - p3.x()) + p3Squared * (p2.x() - p1.x())) / determinant;
+            var center = new Anchor(cx, cy);
+            return new ObjectInfo("circumcircle", instruction.label(), null, center, distance(center, p1), null);
         }
     }
 }

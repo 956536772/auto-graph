@@ -1,3 +1,6 @@
+const EXAM_POINT_MARKER_RADIUS = '3';
+const EXAM_GEOMETRY_STROKE_WIDTH = '2';
+
 export class SVGProcessor {
   constructor(svgString) {
     const parser = new DOMParser();
@@ -8,7 +11,7 @@ export class SVGProcessor {
     }
   }
 
-  processForExam({ xmin, xmax, ymin, ymax, board, pointIds = [], circleCenterIds = [], pointLabels = [] }) {
+  processForExam({ xmin, xmax, ymin, ymax, board, pointIds = [], circleCenterIds = [], circlePointIds = [], explicitPointIds = [], pointLabels = [] }) {
     if (!Number.isFinite(xmin) || !Number.isFinite(xmax) || !Number.isFinite(ymin) || !Number.isFinite(ymax)) {
       throw new Error('预览选区坐标无效');
     }
@@ -56,15 +59,20 @@ export class SVGProcessor {
       const pidMatch = pointIds.find(pid => id === pid || id.endsWith('_' + pid));
       if (pidMatch) {
         if (el.tagName.toLowerCase() !== 'text') {
-          // If it's a circle center, keep it and style it as a solid dot
+          // Keep explicit user/AI points in the exam preview while hiding unregistered auxiliary points.
           const isCircleCenter = circleCenterIds.includes(pidMatch);
-          if (isCircleCenter) {
+          const isCirclePoint = circlePointIds.includes(pidMatch);
+          const isExplicitPoint = explicitPointIds.includes(pidMatch);
+          if (isCircleCenter || isCirclePoint || isExplicitPoint) {
             el.setAttribute('fill', 'black');
             el.setAttribute('stroke', 'black');
             el.setAttribute('stroke-width', '0');
-            // Ensure it's small enough for a "dot" look
-            if (el.tagName.toLowerCase() === 'circle') {
-              el.setAttribute('r', '2');
+            const tagName = el.tagName.toLowerCase();
+            if (tagName === 'circle') {
+              el.setAttribute('r', EXAM_POINT_MARKER_RADIUS);
+            } else if (tagName === 'ellipse') {
+              el.setAttribute('rx', EXAM_POINT_MARKER_RADIUS);
+              el.setAttribute('ry', EXAM_POINT_MARKER_RADIUS);
             }
           } else {
             // Remove other points
@@ -87,6 +95,8 @@ export class SVGProcessor {
       const tagName = el.tagName.toLowerCase();
       const id = el.getAttribute('id') || '';
       const isCircleCenter = circleCenterIds.some(pid => id === pid || id.endsWith('_' + pid));
+      const isCirclePoint = circlePointIds.some(pid => id === pid || id.endsWith('_' + pid));
+      const isExplicitPoint = explicitPointIds.some(pid => id === pid || id.endsWith('_' + pid));
 
       if (tagName === 'text') {
         el.setAttribute('fill', 'black');
@@ -94,13 +104,12 @@ export class SVGProcessor {
         el.style.fontFamily = '"Times New Roman", Times, serif';
         el.style.fontSize = (parseFloat(el.style.fontSize) || 12) + 'px';
         el.style.fontWeight = 'bold';
-      } else if (!isCircleCenter) {
-        // Skip restyling if it's a circle center (already styled above)
+      } else if (!isCircleCenter && !isCirclePoint && !isExplicitPoint) {
+        // Skip restyling if it's a kept point (already styled above)
         const currentStroke = el.getAttribute('stroke');
         if (currentStroke && currentStroke !== 'none') {
           el.setAttribute('stroke', 'black');
-          const sw = parseFloat(el.getAttribute('stroke-width') || 1);
-          el.setAttribute('stroke-width', sw * 1.5);
+          el.setAttribute('stroke-width', EXAM_GEOMETRY_STROKE_WIDTH);
         }
 
         const currentFill = el.getAttribute('fill');

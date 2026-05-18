@@ -11,6 +11,7 @@ final class GeometryCapabilityContract {
     private static final Set<String> SUPPORTED_ACTIONS = Set.of(
         "place_point",
         "segment",
+        "line",
         "midpoint",
         "parallel",
         "perpendicular",
@@ -23,8 +24,33 @@ final class GeometryCapabilityContract {
         "polygon",
         "angle",
         "bisector",
+        "glider",
         "function_graph",
-        "show_axis"
+        "show_axis",
+        "delete_object"
+    );
+
+    private static final Set<String> DELETABLE_TYPES = Set.of(
+        "point",
+        "glider",
+        "circumcenter",
+        "incenter",
+        "midpoint",
+        "intersection",
+        "otherintersection",
+        "segment",
+        "line",
+        "parallel",
+        "perpendicular",
+        "tangent",
+        "bisector",
+        "functiongraph",
+        "circle",
+        "circumcircle",
+        "incircle",
+        "polygon",
+        "angle",
+        "ellipse"
     );
 
     private GeometryCapabilityContract() {
@@ -67,6 +93,10 @@ final class GeometryCapabilityContract {
         if (instruction == null || instruction.action() == null || !SUPPORTED_ACTIONS.contains(instruction.action())) {
             return ValidationResult.invalid("unsupported_action");
         }
+        var params = instruction.params() == null ? Map.<String, Object>of() : instruction.params();
+        if ("delete_object".equals(instruction.action())) {
+            return validateDeleteObject(params, known);
+        }
         var resultId = instruction.resultId();
         if (resultId == null || resultId.isBlank()) {
             return ValidationResult.invalid("missing_required_param");
@@ -77,7 +107,6 @@ final class GeometryCapabilityContract {
         if (!resultIds.add(resultId)) {
             return ValidationResult.invalid("duplicate_result_id");
         }
-        var params = instruction.params() == null ? Map.<String, Object>of() : instruction.params();
         var validation = validateParams(instruction.action(), params, known);
         if (!validation.valid()) {
             return validation;
@@ -86,10 +115,35 @@ final class GeometryCapabilityContract {
         return ValidationResult.ok();
     }
 
+    private static ValidationResult validateDeleteObject(Map<String, Object> params, Map<String, GeometryObjectInfo> known) {
+        var target = stringParam(params, "target");
+        if (target == null || target.isBlank()) {
+            return ValidationResult.invalid("missing_required_param");
+        }
+        var object = known.get(target);
+        if (object != null) {
+            if (!DELETABLE_TYPES.contains(object.type())) {
+                return ValidationResult.invalid("invalid_object_type");
+            }
+            known.remove(target);
+            return ValidationResult.ok();
+        }
+
+        var candidates = candidatesByLabel(target, known, DELETABLE_TYPES);
+        if (candidates.size() == 1) {
+            known.remove(candidates.get(0).id());
+            return ValidationResult.ok();
+        }
+        if (candidates.size() > 1) {
+            return ValidationResult.clarify(Clarification.fromCandidates("我不确定你要删除哪一个对象，请明确说出对象 ID。", candidates));
+        }
+        return ValidationResult.invalid("unknown_reference");
+    }
+
     private static ValidationResult validateParams(String action, Map<String, Object> params, Map<String, GeometryObjectInfo> known) {
         return switch (action) {
             case "place_point" -> requireNumbers(params, "x", "y");
-            case "segment" -> requireRefs(params, known, GeometryChatService.POINT_TYPES, "p1", "p2");
+            case "segment", "line" -> requireRefs(params, known, GeometryChatService.POINT_TYPES, "p1", "p2");
             case "midpoint" -> requireRefs(params, known, GeometryChatService.POINT_TYPES, "p1", "p2");
             case "parallel", "perpendicular" -> requireRefsByType(params, known, Map.of(
                 "line", GeometryChatService.LINE_TYPES,
@@ -106,10 +160,20 @@ final class GeometryCapabilityContract {
                 "vertex", GeometryChatService.POINT_TYPES,
                 "p2", GeometryChatService.POINT_TYPES
             ));
+            case "glider" -> validateGlider(params, known);
             case "function_graph" -> validateFunctionGraph(params);
             case "show_axis" -> validateShowAxis(params);
+            case "delete_object" -> validateDeleteObject(params, known);
             default -> ValidationResult.invalid("unsupported_action");
         };
+    }
+
+    private static ValidationResult validateGlider(Map<String, Object> params, Map<String, GeometryObjectInfo> known) {
+        var numeric = requireNumbers(params, "x", "y");
+        if (!numeric.valid()) {
+            return numeric;
+        }
+        return validateReference(stringParam(params, "path"), known, intersectableTypes());
     }
 
     private static ValidationResult validateFunctionGraph(Map<String, Object> params) {
@@ -319,8 +383,9 @@ record GeometryObjectInfo(String type, Anchor position, Anchor center, Double ra
     static GeometryObjectInfo created(String action, Map<String, Object> params) {
         return switch (action) {
             case "place_point" -> new GeometryObjectInfo("point", new Anchor(number(params, "x"), number(params, "y")), null, null, null);
+            case "glider" -> new GeometryObjectInfo("glider", new Anchor(number(params, "x"), number(params, "y")), null, null, null);
             case "midpoint", "intersection", "otherintersection" -> new GeometryObjectInfo("point", null, null, null, null);
-            case "segment", "parallel", "perpendicular", "tangent", "bisector" -> new GeometryObjectInfo(action, null, null, null, null);
+            case "segment", "line", "parallel", "perpendicular", "tangent", "bisector" -> new GeometryObjectInfo(action, null, null, null, null);
             case "circle" -> circleInfo(params);
             case "circumcircle", "incircle" -> new GeometryObjectInfo(action, null, null, null, null);
             case "function_graph" -> new GeometryObjectInfo("functiongraph", null, null, null, null);

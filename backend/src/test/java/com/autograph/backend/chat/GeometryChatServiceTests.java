@@ -35,7 +35,66 @@ class GeometryChatServiceTests {
     }
 
     @Test
-    void shouldUseLlmWhenImageIsAttachedEvenForDirectTextSpecialCase() {
+    void shouldAllowDeletingExistingObjectWithoutResultId() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("delete_object", Map.of("target", "triangle_ABC"), null, null)
+        ), "已删除三角形 ABC。")));
+
+        var response = service.handle(new ChatRequest(
+            "删除三角形ABC",
+            List.of(
+                point("A", 0, 0, 0),
+                point("B", 4, 0, 1),
+                point("C", 2, 3, 2),
+                new CanvasObjectPayload(
+                    "triangle_ABC",
+                    "polygon",
+                    null,
+                    3,
+                    new Anchor(2, 1),
+                    null,
+                    null,
+                    null,
+                    List.of(),
+                    null,
+                    null,
+                    List.of(
+                        new CanvasPointPayload("A", "A", 0d, 0d),
+                        new CanvasPointPayload("B", "B", 4d, 0d),
+                        new CanvasPointPayload("C", "C", 2d, 3d)
+                    ),
+                    null
+                )
+            )
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals("delete_object", response.instructions().get(0).action());
+        assertEquals(Map.of("target", "triangle_ABC"), response.instructions().get(0).params());
+        assertEquals("已删除三角形 ABC。", response.responseText());
+    }
+
+    @Test
+    void shouldClarifyAmbiguousDeleteTargetLabels() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("delete_object", Map.of("target", "A"), null, null)
+        ), "已删除点A。")));
+
+        var response = service.handle(new ChatRequest(
+            "删除点A",
+            List.of(
+                new CanvasObjectPayload("point_a_1", "point", "A", 0, new Anchor(0, 0), null, null, List.of(), null),
+                new CanvasObjectPayload("point_a_2", "point", "A", 1, new Anchor(1, 0), null, null, List.of(), null)
+            )
+        ));
+
+        assertEquals("clarification", response.status());
+        assertNotNull(response.clarification());
+        assertEquals(2, response.clarification().candidates().size());
+    }
+
+    @Test
+    void shouldUseLlmForImageRequests() {
         var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
             new DrawingInstruction("place_point", Map.of("x", 0, "y", 0), "P", "P")
         ), "已根据图片绘制点P。")));
@@ -50,6 +109,360 @@ class GeometryChatServiceTests {
         assertEquals("place_point", response.instructions().get(0).action());
         assertEquals("已根据图片绘制点P。", response.responseText());
     }
+
+    @Test
+    void shouldNotGenerateLocalDrawingInstructionsWhenLlmReturnsError() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.error("模型未生成可执行指令。")));
+
+        var response = service.handle(new ChatRequest(
+            "连接OD",
+            List.of(
+                pointWithId("circle_o_center", "O", 0, 0, 0),
+                pointWithId("point_d", "D", 3, 1, 1)
+            )
+        ));
+
+        assertEquals("error", response.status());
+        assertTrue(response.instructions().isEmpty());
+        assertEquals("模型未生成可执行指令。", response.responseText());
+    }
+
+    @Test
+    void shouldResolveLineRequestInstructionsFromLlmLabels() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("line", Map.of("p1", "E", "p2", "F"), "line_EF", null)
+        ), "已作直线 EF。")));
+
+        var response = service.handle(new ChatRequest(
+            "我要作直线EF",
+            List.of(
+                pointWithId("point_e", "E", 0, 0, 0),
+                pointWithId("point_f", "F", 4, 1, 1)
+            )
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals("line", response.instructions().get(0).action());
+        assertEquals(Map.of("p1", "point_e", "p2", "point_f"), response.instructions().get(0).params());
+    }
+
+    @Test
+    void shouldValidateLlmCreatedMissingPointsForLineRequest() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("place_point", Map.of("x", -2.0, "y", 1.0), "E", "E"),
+            new DrawingInstruction("place_point", Map.of("x", 2.0, "y", 1.0), "F", "F"),
+            new DrawingInstruction("line", Map.of("p1", "E", "p2", "F"), "line_EF", null)
+        ), "已作直线 EF。")));
+
+        var response = service.handle(new ChatRequest("我要作直线EF", List.of()));
+
+        assertEquals("instructions", response.status());
+        assertEquals(List.of("place_point", "place_point", "line"), response.instructions().stream().map(DrawingInstruction::action).toList());
+        assertEquals(Map.of("p1", "E", "p2", "F"), response.instructions().get(2).params());
+    }
+
+    @Test
+    void shouldValidateLlmTangentDescriptionPointMetadata() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("tangent", Map.of(
+                "circle", "circle_1",
+                "point", "A",
+                "descriptionPointLabel", "D",
+                "descriptionPointResultId", "D"
+            ), "tangent_AD", null)
+        ), "已过点 A 作切线 AD。")));
+
+        var response = service.handle(new ChatRequest(
+            "过点A作切线AD",
+            List.of(
+                pointWithId("point_a", "A", 2, 0, 0),
+                circle("circle_1", 0, 0, 2, 1)
+            )
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals(Map.of(
+            "circle", "circle_1",
+            "point", "point_a",
+            "descriptionPointLabel", "D",
+            "descriptionPointResultId", "D"
+        ), response.instructions().get(0).params());
+    }
+
+    @Test
+    void shouldAllowTangentsAtCirclePointsAndTheirIntersection() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("tangent", Map.of("circle", "O", "point", "A"), "tangent_A", null),
+            new DrawingInstruction("tangent", Map.of("circle", "O", "point", "B"), "tangent_B", null),
+            new DrawingInstruction("intersection", Map.of("first", "tangent_A", "second", "tangent_B", "index", 0), "D", "D")
+        ), "已过 A、B 作圆 O 的切线并标出交点 D。")));
+
+        var response = service.handle(new ChatRequest(
+            "过点A 作圆O的切线 与 过点B的切线 交于 点D",
+            List.of(
+                pointWithId("A", "A", 0, 5, 0),
+                pointWithId("B", "B", -4, -3, 1),
+                pointWithId("C", "C", 4, -3, 2),
+                new CanvasObjectPayload("circle_ABC_center", "point", "O", 4, new Anchor(0, 0), null, null, List.of(), null),
+                new CanvasObjectPayload("circle_ABC", "circumcircle", null, 5, new Anchor(0, 0), new Anchor(0, 0), 5.0, List.of(), "O")
+            )
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals(List.of("tangent", "tangent", "intersection"), response.instructions().stream().map(DrawingInstruction::action).toList());
+        assertEquals(Map.of("circle", "circle_ABC", "point", "A"), response.instructions().get(0).params());
+        assertEquals(Map.of("circle", "circle_ABC", "point", "B"), response.instructions().get(1).params());
+        assertEquals(Map.of("first", "tangent_A", "second", "tangent_B", "index", 0), response.instructions().get(2).params());
+        assertEquals("D", response.instructions().get(2).resultId());
+        assertEquals("D", response.instructions().get(2).label());
+    }
+
+    @Test
+    void shouldAllowTangentOnNewlyCreatedCircumcircle() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction(
+                "circumcircle",
+                Map.of(
+                    "p1", "point_1779109477750_3",
+                    "p2", "point_1779109478316_4",
+                    "p3", "point_1779109478983_6"
+                ),
+                "circle_O",
+                null
+            ),
+            new DrawingInstruction("place_point", Map.of("x", -3.866, "y", -0.042), "point_O", "O"),
+            new DrawingInstruction(
+                "tangent",
+                Map.of(
+                    "circle", "circle_O",
+                    "point", "point_1779109477750_3",
+                    "descriptionPointLabel", "D",
+                    "descriptionPointResultId", "point_D"
+                ),
+                "tangent_AD",
+                null
+            )
+        ), "已绘制过点 A、B、C 的外接圆 O，并过点 A 作出了切线 AD。")));
+
+        var response = service.handle(new ChatRequest(
+            "过点A、B、C的外接圆O，并过点A作切线AD",
+            List.of(
+                pointWithId("point_1779109477750_3", "A", 0, 5, 0),
+                pointWithId("point_1779109478316_4", "B", -4, -3, 1),
+                pointWithId("point_1779109478983_6", "C", 4, -3, 2)
+            )
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals(List.of("circumcircle", "place_point", "tangent"), response.instructions().stream().map(DrawingInstruction::action).toList());
+        assertEquals(Map.of(
+            "circle", "circle_O",
+            "point", "point_1779109477750_3",
+            "descriptionPointLabel", "D",
+            "descriptionPointResultId", "point_D"
+        ), response.instructions().get(2).params());
+    }
+
+    @Test
+    void shouldConnectExistingPointLabelsFromLlmSegmentInstruction() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("segment", Map.of("p1", "A", "p2", "D"), "segment_AD", null)
+        ), "已连接 AD。")));
+
+        var response = service.handle(new ChatRequest(
+            "连接AD",
+            List.of(
+                pointWithId("point_a", "A", 2, 0, 0),
+                pointWithId("point_d", "D", 3, 1, 1),
+                new CanvasObjectPayload("tangent_AD", "tangent", null, 2, null, null, null, List.of("A", "D"), null)
+            )
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals(1, response.instructions().size());
+        assertEquals("segment", response.instructions().get(0).action());
+        assertEquals("segment_AD", response.instructions().get(0).resultId());
+        assertEquals(Map.of("p1", "point_a", "p2", "point_d"), response.instructions().get(0).params());
+        assertEquals("已连接 AD。", response.responseText());
+    }
+
+    @Test
+    void shouldConnectGeneratedCircleCenterAndPointFromLlmSegmentInstruction() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("segment", Map.of("p1", "O", "p2", "D"), "segment_OD", null)
+        ), "已连接 OD。")));
+
+        var response = service.handle(new ChatRequest(
+            "连接OD",
+            List.of(
+                pointWithId("circle_o_center", "O", 0, 0, 0),
+                pointWithId("point_d", "D", 3, 1, 1),
+                new CanvasObjectPayload("circle_o", "circle", null, 2, new Anchor(0, 0), new Anchor(0, 0), 2.0, List.of(), "O")
+            )
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals("segment", response.instructions().get(0).action());
+        assertEquals(Map.of("p1", "circle_o_center", "p2", "point_d"), response.instructions().get(0).params());
+    }
+
+    @Test
+    void shouldConnectIntersectionPointFromLlmSegmentInstruction() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("segment", Map.of("p1", "O", "p2", "D"), "segment_OD", null)
+        ), "已连接 OD。")));
+
+        var response = service.handle(new ChatRequest(
+            "连接OD",
+            List.of(
+                pointWithId("circle_ABC_center", "O", 0, -0.001111111111111186, 0),
+                new CanvasObjectPayload(
+                    "D",
+                    "intersection",
+                    "D",
+                    1,
+                    new Anchor(5.194230769230771, 3.0000000000000004),
+                    null,
+                    null,
+                    List.of(),
+                    null
+                )
+            )
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals(1, response.instructions().size());
+        assertEquals("segment", response.instructions().get(0).action());
+        assertEquals(Map.of("p1", "circle_ABC_center", "p2", "D"), response.instructions().get(0).params());
+    }
+
+    @Test
+    void shouldAcceptLlmCreatedCenterPointWhenConnectingCircleCenterLabel() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("place_point", Map.of("x", 0.0, "y", 0.0), "O", "O"),
+            new DrawingInstruction("segment", Map.of("p1", "O", "p2", "D"), "segment_OD", null)
+        ), "已连接 OD。")));
+
+        var response = service.handle(new ChatRequest(
+            "连接OD",
+            List.of(
+                new CanvasObjectPayload("circle_o", "circle", null, 0, new Anchor(0, 0), new Anchor(0, 0), 2.0, List.of(), "O"),
+                pointWithId("point_d", "D", 3, 1, 1)
+            )
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals(List.of("place_point", "segment"), response.instructions().stream().map(DrawingInstruction::action).toList());
+        assertEquals("O", response.instructions().get(0).resultId());
+        assertEquals("O", response.instructions().get(0).label());
+        assertEquals(Map.of("x", 0.0, "y", 0.0), response.instructions().get(0).params());
+        assertEquals(Map.of("p1", "O", "p2", "point_d"), response.instructions().get(1).params());
+    }
+
+    @Test
+    void shouldExpandTangentsFromExternalPointToCircle() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("tangents_from_point_to_circle", Map.of("point", "G", "circle", "circle_o"), "tangent_from_G", null)
+        ), "已过点G作圆O的切线。")));
+
+        var response = service.handle(new ChatRequest(
+            "过点G作圆O的切线",
+            List.of(
+                pointWithId("point_g", "G", 5, 0, 0),
+                new CanvasObjectPayload("circle_o", "circle", null, 1, new Anchor(0, 0), new Anchor(0, 0), 3.0, List.of(), "O")
+            )
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals(List.of("glider", "tangent", "glider", "tangent"), response.instructions().stream().map(DrawingInstruction::action).toList());
+        assertEquals(Map.of("x", 1.8, "y", 2.4, "path", "circle_o"), response.instructions().get(0).params());
+        assertEquals(Map.of("circle", "circle_o", "point", "tangent_from_G_touch_1"), response.instructions().get(1).params());
+        assertEquals(Map.of("x", 1.8, "y", -2.4, "path", "circle_o"), response.instructions().get(2).params());
+        assertEquals(Map.of("circle", "circle_o", "point", "tangent_from_G_touch_2"), response.instructions().get(3).params());
+        assertTrue(response.responseText().contains("已从圆外点近似计算两个切点"));
+    }
+
+    @Test
+    void shouldNormalizeDirectTangentFromExternalPointToHighLevelTangents() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("tangent", Map.of("point", "G", "circle", "circle_o"), "tangent_from_G", null)
+        ), "已过点G作圆O的切线。")));
+
+        var response = service.handle(new ChatRequest(
+            "过点G作圆O的切线",
+            List.of(
+                pointWithId("point_g", "G", 5, 0, 0),
+                new CanvasObjectPayload("circle_o", "circle", null, 1, new Anchor(0, 0), new Anchor(0, 0), 3.0, List.of(), "O")
+            )
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals(List.of("glider", "tangent", "glider", "tangent"), response.instructions().stream().map(DrawingInstruction::action).toList());
+    }
+
+    @Test
+    void shouldKeepExternalTangentPointLabelsOnlyOnTouchPoints() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction(
+                "tangents_from_point_to_circle",
+                Map.of("point", "G", "circle", "circle_o", "labels", List.of("C", "D")),
+                "tangent_from_G",
+                null
+            )
+        ), "已过点G作圆O的切线。")));
+
+        var response = service.handle(new ChatRequest(
+            "过点G作圆O的切线",
+            List.of(
+                pointWithId("point_g", "G", 5, 0, 0),
+                new CanvasObjectPayload("circle_o", "circle", null, 1, new Anchor(0, 0), new Anchor(0, 0), 3.0, List.of(), "O")
+            )
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals("C", response.instructions().get(0).resultId());
+        assertEquals("C", response.instructions().get(0).label());
+        assertEquals(Map.of("circle", "circle_o", "point", "C"), response.instructions().get(1).params());
+        assertEquals("D", response.instructions().get(2).resultId());
+        assertEquals("D", response.instructions().get(2).label());
+        assertEquals(Map.of("circle", "circle_o", "point", "D"), response.instructions().get(3).params());
+    }
+
+    @Test
+    void shouldNormalizeModelSegmentToLineWhenUserExplicitlyRequestsLine() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("segment", Map.of("p1", "E", "p2", "F"), "line_EF", null)
+        ), "已作直线EF。")));
+
+        var response = service.handle(new ChatRequest(
+            "我要作直线EF",
+            List.of(
+                pointWithId("point_e", "E", 0, 0, 0),
+                pointWithId("point_f", "F", 4, 1, 1)
+            ),
+            new ChatImagePayload("image/png", "abc123", "diagram.png")
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals("line", response.instructions().get(0).action());
+        assertEquals(Map.of("p1", "point_e", "p2", "point_f"), response.instructions().get(0).params());
+    }
+
+    @Test
+    void shouldReturnImageConversationMessageWithoutDrawingInstructions() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.message("图片中有一个三角形和一条辅助线。")));
+
+        var response = service.handle(new ChatRequest(
+            "这张图里有什么？",
+            List.of(),
+            new ChatImagePayload("image/png", "abc123", "diagram.png")
+        ));
+
+        assertEquals("message", response.status());
+        assertEquals("图片中有一个三角形和一条辅助线。", response.responseText());
+        assertTrue(response.instructions().isEmpty());
+    }
+
 
     @Test
     void shouldExpandWordProblemHighLevelInstructionsToBaseInstructions() {
@@ -103,7 +516,7 @@ class GeometryChatServiceTests {
         var response = service.handle(new ChatRequest("过P作AB的平行线和垂线"));
 
         assertEquals("instructions", response.status());
-        assertEquals("segment", response.instructions().get(2).action());
+        assertEquals("line", response.instructions().get(2).action());
         assertEquals("parallel", response.instructions().get(4).action());
         assertEquals("perpendicular", response.instructions().get(5).action());
         assertEquals("已完成骨架构图。", response.responseText());
@@ -139,6 +552,45 @@ class GeometryChatServiceTests {
         assertEquals("segment", response.instructions().get(1).action());
         assertEquals("segment_AD", response.instructions().get(1).resultId());
         assertEquals(Map.of("p1", "A", "p2", "D"), response.instructions().get(1).params());
+    }
+
+    @Test
+    void shouldAllowDerivedCircleCenterContextAsPointReference() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("perpendicular_foot_segment", Map.of(
+                "point", "circumcircle_ABC_center",
+                "p1", "B",
+                "p2", "C",
+                "footResultId", "E",
+                "footLabel", "E"
+            ), "segment_OE", null)
+        ), "已过点O作BC的垂线段OE。")));
+
+        var response = service.handle(new ChatRequest(
+            "过点O作BC的垂线交BC于E",
+            List.of(
+                point("B", -3, -1, 0),
+                point("C", 4, -1, 1),
+                new CanvasObjectPayload(
+                    "circumcircle_ABC_center",
+                    "circumcenter",
+                    "O",
+                    2,
+                    new Anchor(0.5, -0.5),
+                    null,
+                    null,
+                    List.of(),
+                    null
+                )
+            )
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals(List.of("place_point", "segment"), response.instructions().stream().map(DrawingInstruction::action).toList());
+        assertEquals("E", response.instructions().get(0).resultId());
+        assertEquals("E", response.instructions().get(0).label());
+        assertEquals(Map.of("x", 0.5, "y", -1.0), response.instructions().get(0).params());
+        assertEquals(Map.of("p1", "circumcircle_ABC_center", "p2", "E"), response.instructions().get(1).params());
     }
 
     @Test
@@ -242,30 +694,40 @@ class GeometryChatServiceTests {
     }
 
     @Test
-    void shouldReturnFixedSegmentInstructionsForDirectPhrase() {
+    void shouldExpandPointOnCircleAsGliderBoundToCirclePath() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("point_on_circle", Map.of("circle", "circle_1", "angle", 0), "P", "P")
+        ), "已在圆上取点 P。")));
+
+        var response = service.handle(new ChatRequest(
+            "在圆上取一点P",
+            List.of(circle("circle_1", 0, 0, 2, 0))
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals("glider", response.instructions().get(0).action());
+        assertEquals(Map.of("x", 2.0, "y", 0.0, "path", "circle_1"), response.instructions().get(0).params());
+        assertEquals("P", response.instructions().get(0).label());
+    }
+
+    @Test
+    void shouldNotFallbackToLocalSegmentWhenLlmIsDisabled() {
         var service = serviceReturning(LlmDirectResult.unavailable(LlmFailureReason.DISABLED));
 
         var response = service.handle(new ChatRequest("画一条线段"));
 
-        assertEquals("instructions", response.status());
-        assertEquals("已绘制线段 AB。", response.responseText());
-        assertEquals(3, response.instructions().size());
-        assertEquals("place_point", response.instructions().get(0).action());
-        assertEquals(Map.of("x", -2, "y", 1), response.instructions().get(0).params());
-        assertEquals("A", response.instructions().get(0).resultId());
-        assertEquals("A", response.instructions().get(0).label());
-        assertEquals("place_point", response.instructions().get(1).action());
-        assertEquals(Map.of("x", 2, "y", 1), response.instructions().get(1).params());
-        assertEquals("B", response.instructions().get(1).resultId());
-        assertEquals("B", response.instructions().get(1).label());
-        assertEquals("segment", response.instructions().get(2).action());
-        assertEquals(Map.of("p1", "A", "p2", "B"), response.instructions().get(2).params());
-        assertEquals("AB", response.instructions().get(2).resultId());
+        assertEquals("error", response.status());
+        assertTrue(response.instructions().isEmpty());
+        assertEquals("AI 无法使用：AI 服务未启用。", response.responseText());
     }
 
     @Test
-    void shouldKeepFixedSegmentPhraseIdsSafeForExistingCanvas() {
-        var service = serviceReturning(LlmDirectResult.unavailable(LlmFailureReason.DISABLED));
+    void shouldValidateLlmSegmentPhraseIdsForExistingCanvas() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("place_point", Map.of("x", -2, "y", 1), "A_2", "A"),
+            new DrawingInstruction("place_point", Map.of("x", 2, "y", 1), "B_2", "B"),
+            new DrawingInstruction("segment", Map.of("p1", "A_2", "p2", "B_2"), "AB_2", null)
+        ), "已绘制线段 AB。")));
 
         var response = service.handle(new ChatRequest(
             "画一条线段",
@@ -444,6 +906,43 @@ class GeometryChatServiceTests {
         assertEquals("instructions", response.status());
         assertEquals("midpoint", response.instructions().get(0).action());
         assertEquals("已根据你的描述执行了绘图操作。", response.responseText());
+    }
+
+    @Test
+    void shouldResolvePointReferencesByExpectedTypeWhenLabelsCollide() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("segment", Map.of("p1", "A", "p2", "D"), "segment_AD", null)
+        ), "已连接。")));
+
+        var response = service.handle(new ChatRequest(
+            "请把点A与点D连起来",
+            List.of(
+                pointWithId("point_a", "A", 0, 0, 0),
+                new CanvasObjectPayload("line_d", "tangent", "D", 1, null, null, null, List.of("A", "D"), null),
+                pointWithId("point_d", "D", 3, 1, 2)
+            )
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals(Map.of("p1", "point_a", "p2", "point_d"), response.instructions().get(0).params());
+    }
+
+    @Test
+    void shouldResolveCircleReferencesByCenterLabelWhenCircleIsExpected() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("tangent", Map.of("circle", "O", "point", "P"), "tangent_P", null)
+        ), "已作切线。")));
+
+        var response = service.handle(new ChatRequest(
+            "作点P处圆O的切线",
+            List.of(
+                pointWithId("point_p", "P", 2, 0, 0),
+                new CanvasObjectPayload("circle_o", "circle", null, 1, new Anchor(0, 0), new Anchor(0, 0), 2.0, List.of(), "O")
+            )
+        ));
+
+        assertEquals("instructions", response.status());
+        assertEquals(Map.of("circle", "circle_o", "point", "point_p"), response.instructions().get(0).params());
     }
 
     @Test

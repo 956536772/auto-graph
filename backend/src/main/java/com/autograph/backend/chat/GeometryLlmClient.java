@@ -145,7 +145,7 @@ public class GeometryLlmClient {
         try {
             var responseJson = parseJsonContent(content);
             var mode = responseJson.path("mode").asText("");
-            if (!List.of("instructions", "clarification", "error").contains(mode)) {
+            if (!List.of("instructions", "clarification", "error", "message").contains(mode)) {
                 return LlmDirectResult.invalid(LlmFailureReason.INVALID_INTENT);
             }
             var responseText = responseJson.path("responseText").asText(defaultResponseText(mode));
@@ -156,6 +156,9 @@ public class GeometryLlmClient {
             if ("clarification".equals(mode)) {
                 var clarification = parseClarification(responseJson, responseText);
                 return LlmDirectResult.success(GeometryAiResponse.clarification(clarification));
+            }
+            if ("message".equals(mode)) {
+                return LlmDirectResult.success(GeometryAiResponse.message(responseText));
             }
             return LlmDirectResult.success(GeometryAiResponse.error(responseText));
         } catch (IllegalArgumentException exception) {
@@ -247,6 +250,7 @@ public class GeometryLlmClient {
         return switch (mode) {
             case "instructions" -> "已生成绘图指令。";
             case "clarification" -> "我需要你进一步说明。";
+            case "message" -> "我已根据图片和问题完成分析。";
             case "error" -> "这个绘图请求暂时无法处理。";
             default -> "";
         };

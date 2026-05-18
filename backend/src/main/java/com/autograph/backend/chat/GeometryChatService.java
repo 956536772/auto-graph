@@ -7,15 +7,20 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 @Service
 public class GeometryChatService {
     private static final Logger LOGGER = LoggerFactory.getLogger(GeometryChatService.class);
-
-    static final Set<String> POINT_TYPES = Set.of("point", "glider");
+    static final Set<String> POINT_TYPES = Set.of(
+        "point",
+        "glider",
+        "circumcenter",
+        "incenter",
+        "midpoint",
+        "intersection",
+        "otherintersection"
+    );
     static final Set<String> LINE_TYPES = Set.of("segment", "line", "parallel", "perpendicular", "tangent", "functiongraph");
     static final Set<String> CIRCLE_TYPES = Set.of("circle", "circumcircle", "incircle");
 
@@ -31,10 +36,6 @@ public class GeometryChatService {
         var normalizedText = normalize(rawText);
         var canvasContext = request.context() == null ? List.<CanvasObjectPayload>of() : request.context();
         var image = request.image();
-        var directResponse = image == null ? directResponseFor(normalizedText, canvasContext) : null;
-        if (directResponse != null) {
-            return directResponse;
-        }
 
         var context = ContextIndex.from(canvasContext);
         if (normalizedText.isBlank()) {
@@ -48,6 +49,7 @@ public class GeometryChatService {
         return switch (aiResponse.mode()) {
             case "instructions" -> instructionsResponse(aiResponse, canvasContext, rawText);
             case "clarification" -> ChatResponse.clarification(aiResponse.clarification());
+            case "message" -> ChatResponse.message(aiResponse.responseText());
             case "error" -> ChatResponse.error(aiResponse.responseText());
             default -> ChatResponse.error("AI 无法使用：AI 响应格式错误。");
         };
@@ -78,37 +80,6 @@ public class GeometryChatService {
             return ChatResponse.clarification(validation.clarification());
         }
         return ChatResponse.error(errorForValidation(validation));
-    }
-
-    private ChatResponse directResponseFor(String normalizedText, List<CanvasObjectPayload> context) {
-        if (!"画一条线段".equals(normalizedText)) {
-            return null;
-        }
-        var usedIds = context.stream()
-            .map(CanvasObjectPayload::id)
-            .filter(id -> id != null && !id.isBlank())
-            .collect(Collectors.toSet());
-        var firstId = nextAvailableId("A", usedIds);
-        usedIds.add(firstId);
-        var secondId = nextAvailableId("B", usedIds);
-        usedIds.add(secondId);
-        var segmentId = nextAvailableId("AB", usedIds);
-        return instructionsResponse(GeometryAiResponse.instructions(List.of(
-            new DrawingInstruction("place_point", Map.of("x", -2, "y", 1), firstId, "A"),
-            new DrawingInstruction("place_point", Map.of("x", 2, "y", 1), secondId, "B"),
-            new DrawingInstruction("segment", Map.of("p1", firstId, "p2", secondId), segmentId, null)
-        ), "已绘制线段 AB。"), context, normalizedText);
-    }
-
-    private String nextAvailableId(String base, Set<String> usedIds) {
-        if (!usedIds.contains(base)) {
-            return base;
-        }
-        var suffix = 2;
-        while (usedIds.contains(base + "_" + suffix)) {
-            suffix++;
-        }
-        return base + "_" + suffix;
     }
 
     private String aiUnavailableMessage(LlmFailureReason reason) {

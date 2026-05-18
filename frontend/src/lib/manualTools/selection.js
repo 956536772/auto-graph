@@ -1,9 +1,11 @@
-const POINT_TYPES = new Set(['point', 'glider']);
-const LINE_TYPES = ['segment', 'line', 'parallel', 'perpendicular', 'bisector', 'tangent'];
-const PATH_TYPES = new Set([...LINE_TYPES, 'circle', 'ellipse']);
-const SELECTABLE_TYPES = new Set(['point', 'glider', ...LINE_TYPES, 'circle', 'ellipse', 'polygon', 'angle']);
+export const POINT_TYPES = new Set(['point', 'glider', 'midpoint', 'intersection', 'otherintersection', 'circumcenter']);
+export const LINE_TYPES = ['segment', 'line', 'parallel', 'perpendicular', 'bisector', 'tangent'];
+const CIRCLE_PATH_TYPES = new Set(['circle', 'circumcircle', 'incircle']);
+export const PATH_TYPES = new Set([...LINE_TYPES, ...CIRCLE_PATH_TYPES, 'ellipse', 'functiongraph']);
+export const SELECTABLE_TYPES = new Set([...POINT_TYPES, ...LINE_TYPES, ...CIRCLE_PATH_TYPES, 'ellipse', 'functiongraph', 'polygon', 'angle']);
 
 export const PATH_SNAP_RADIUS_PX = 6;
+export const PATH_SELECT_RADIUS_PX = 12;
 
 export function isRegisteredSelectableElement(element, registry) {
   return Boolean(
@@ -27,6 +29,10 @@ export function classifySelectableElement(element) {
     return 'shape';
   }
   return null;
+}
+
+export function isCirclePathElement(element) {
+  return CIRCLE_PATH_TYPES.has(element?.elType);
 }
 
 export function chooseTargetFromElements(elements, registry, options = {}) {
@@ -76,7 +82,7 @@ export function isWithinSnapRadius(distance, radius) {
 }
 
 export function getCircleSnapDistancePx(circle, mouse, toScreenCoords) {
-  if (!circle || circle.elType !== 'circle' || typeof toScreenCoords !== 'function') {
+  if (!isCirclePathElement(circle) || typeof toScreenCoords !== 'function') {
     return Number.POSITIVE_INFINITY;
   }
   if (!circle.center || typeof circle.center.X !== 'function' || typeof circle.center.Y !== 'function') {

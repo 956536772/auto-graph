@@ -1,4 +1,6 @@
 import JXG from 'jsxgraph';
+import { getNextPointLabel } from './manualTools/labels.js';
+import { createBoardPanDragGuard } from './manualTools/panDragGuard.js';
 
 export class DrawingEngine {
     constructor(board, registry, options = {}) {
@@ -44,6 +46,12 @@ export class DrawingEngine {
                     break;
                 case 'segment':
                     obj = this.board.create('segment', [this.resolveRef(params.p1), this.resolveRef(params.p2)], {
+                        ...commonAttr, draggable: true
+                    });
+                    this.addHoverCursor(obj);
+                    break;
+                case 'line':
+                    obj = this.board.create('line', [this.resolveRef(params.p1), this.resolveRef(params.p2)], {
                         ...commonAttr, draggable: true
                     });
                     this.addHoverCursor(obj);
@@ -251,6 +259,9 @@ export class DrawingEngine {
                     this.board.update();
                     break;
                 }
+                case 'delete_object':
+                    this.registry.removeById?.(this.board, params.target);
+                    break;
             }
         } catch (e) {
             console.error('创建形状失败:', e);
@@ -265,7 +276,9 @@ export class DrawingEngine {
                 obj.meta = { ...(obj.meta || {}), ...meta };
             }
             this.registerCircleCenterIfNeeded(obj, ins);
+            const lineDescriptionPoint = this.prepareLineDescriptionPointIfNeeded(obj, ins);
             this.registerCreatedObject(result_id, obj, ins);
+            this.registerPreparedLineDescriptionPoint(lineDescriptionPoint);
         }
 
         return obj;
@@ -320,6 +333,101 @@ export class DrawingEngine {
     }
     isCircleInstruction(action) {
         return action === 'circle' || action === 'circumcircle' || action === 'incircle';
+    }
+    prepareLineDescriptionPointIfNeeded(line, instruction) {
+        const { action, params = {}, result_id } = instruction;
+        if (!result_id || !this.needsGeneratedLineDescriptionPoint(action, params, line)) {
+            return null;
+        }
+
+        const pointId = this.getUniqueResultId(params.descriptionPointResultId || `${result_id}_point`);
+        const label = params.descriptionPointLabel || getNextPointLabel(this.registry);
+        const coords = this.getLineDescriptionPointCoords(line, instruction);
+
+        line.meta = {
+            ...(line.meta || {}),
+            descriptionPointId: pointId
+        };
+
+        return {
+            id: pointId,
+            label,
+            coords,
+            lineId: result_id,
+            line,
+            sourceAction: action
+        };
+    }
+    registerPreparedLineDescriptionPoint(prepared) {
+        if (!prepared) {
+            return;
+        }
+
+        const point = this.board.create('glider', [prepared.coords.x, prepared.coords.y, prepared.line], {
+            ...this.getCommonAttributes(prepared.label),
+            strokeColor: '#ff4d4f',
+            fillColor: '#fff'
+        });
+        point.meta = {
+            ...(point.meta || {}),
+            generatedLinePointFor: prepared.lineId
+        };
+        this.registerCreatedObject(prepared.id, point, {
+            action: 'glider',
+            params: { x: prepared.coords.x, y: prepared.coords.y, path: prepared.lineId },
+            result_id: prepared.id,
+            label: prepared.label,
+            meta: point.meta,
+            generatedFor: prepared.sourceAction
+        });
+    }
+    needsGeneratedLineDescriptionPoint(action, params, line) {
+        if (!line) {
+            return false;
+        }
+        if (params?.descriptionPoint === false) {
+            return false;
+        }
+        if (action === 'tangent') {
+            return Boolean(params?.descriptionPointLabel || params?.descriptionPointResultId);
+        }
+        return action === 'parallel' || action === 'perpendicular' || action === 'bisector';
+    }
+    getLineDescriptionPointCoords(line, instruction) {
+        const { action, params = {} } = instruction;
+        const anchorRef = this.getLineAnchorRef(action, params);
+        const anchor = this.pointCoords(this.resolveRef(anchorRef));
+        if (anchor) {
+            return { x: anchor.x + 1, y: anchor.y + 1 };
+        }
+
+        const first = this.pointCoords(line.point1);
+        const second = this.pointCoords(line.point2);
+        if (first && second) {
+            return {
+                x: first.x + (second.x - first.x) * 0.65,
+                y: first.y + (second.y - first.y) * 0.65
+            };
+        }
+
+        return { x: 1, y: 1 };
+    }
+    getLineAnchorRef(action, params) {
+        if (action === 'parallel' || action === 'perpendicular' || action === 'tangent') {
+            return params.point;
+        }
+        if (action === 'bisector') {
+            return params.vertex;
+        }
+        return null;
+    }
+    pointCoords(point) {
+        if (!point || typeof point.X !== 'function' || typeof point.Y !== 'function') {
+            return null;
+        }
+        const x = point.X();
+        const y = point.Y();
+        return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
     }
     getUniqueResultId(baseId) {
         const base = baseId || `circle_center_${Date.now()}`;
@@ -377,6 +485,16 @@ export class DrawingEngine {
             fixed: true,
             highlight: false,
             label: { fixed: false }
+        });
+        if (typeof center.setName === 'function') {
+            center.setName(label || '');
+        }
+        if (label) {
+            center.hasLabel = true;
+        }
+        center.label?.setAttribute?.({
+            visible: Boolean(label),
+            fixed: false
         });
     }
     createObjectFromSnapshot(entry) {
@@ -547,6 +665,7 @@ export class DrawingEngine {
             tangent: [params.circle, params.point],
             bisector: [params.p1, params.vertex, params.p2],
             angle: [params.p1, params.vertex, params.p2],
+            glider: [params.path],
             circumcircle: [params.p1, params.p2, params.p3],
             incircle: [params.p1, params.p2, params.p3],
             intersection: [params.first, params.second],
@@ -615,14 +734,13 @@ export class DrawingEngine {
     }
     attachTranslationDrag(shape, controlPoints) {
         let dragOrigin = null;
-        let originalPan = null;
+        const panDragGuard = createBoardPanDragGuard(this.board);
 
         shape.on('down', (event) => {
             if (event?.preventDefault) {
                 event.preventDefault();
             }
-            originalPan = this.board.options?.pan?.enabled;
-            this.board.setAttribute({ pan: { enabled: false } });
+            panDragGuard.start();
             const mouse = this.board.getUsrCoordsOfMouse(event);
             dragOrigin = {
                 mouse: { x: mouse[0], y: mouse[1] },
@@ -647,10 +765,12 @@ export class DrawingEngine {
 
         shape.on('up', () => {
             dragOrigin = null;
-            if (originalPan !== null) {
-                this.board.setAttribute({ pan: { enabled: originalPan } });
-                originalPan = null;
-            }
+            panDragGuard.restore();
+        });
+
+        shape.on('remove', () => {
+            dragOrigin = null;
+            panDragGuard.restore();
         });
     }
 }

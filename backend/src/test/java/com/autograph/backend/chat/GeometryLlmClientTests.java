@@ -3,7 +3,10 @@ package com.autograph.backend.chat;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.ImageContent;
 import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.TextContent;
+import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
@@ -51,6 +54,25 @@ class GeometryLlmClientTests {
     }
 
     @Test
+    void shouldParseMessageModeForImageConversation() {
+        var chatModel = new CapturingChatModel("""
+            {"mode":"message","responseText":"这张图展示了一个三角形和它的外接圆。"}
+            """);
+        var client = new GeometryLlmClient(chatModel, objectMapper, "test-key", true, "workflow-body");
+
+        var result = client.extractInstructions(
+            "这张图里有什么？",
+            ContextIndex.from(List.of()),
+            new ChatImagePayload("image/png", "iVBORw0KGgo=", "diagram.png")
+        );
+
+        assertEquals(LlmDirectStatus.SUCCESS, result.status());
+        assertEquals("message", result.response().mode());
+        assertEquals("这张图展示了一个三角形和它的外接圆。", result.response().responseText());
+    }
+
+
+    @Test
     void shouldRejectIntentMode() {
         var chatModel = new CapturingChatModel("""
             {"intentType":"CREATE_TRIANGLE","successMessage":"ok","args":{"labels":["A","B","C"]}}
@@ -95,7 +117,7 @@ class GeometryLlmClientTests {
         );
 
         assertEquals(2, chatModel.messages.size());
-        var finalPrompt = ((dev.langchain4j.data.message.UserMessage) chatModel.messages.get(1)).singleText();
+        var finalPrompt = ((UserMessage) chatModel.messages.get(1)).singleText();
         assertTrue(finalPrompt.contains("继续作AB中点"));
         assertTrue(finalPrompt.contains("\"endpointRefs\":[\"A\",\"B\"]"));
         assertTrue(finalPrompt.contains("\"endpoints\""));
@@ -117,7 +139,7 @@ class GeometryLlmClientTests {
         );
 
         assertEquals("workflow-body", ((SystemMessage) chatModel.messages.get(0)).text());
-        var finalPrompt = ((dev.langchain4j.data.message.UserMessage) chatModel.messages.get(chatModel.messages.size() - 1)).singleText();
+        var finalPrompt = ((UserMessage) chatModel.messages.get(chatModel.messages.size() - 1)).singleText();
         assertTrue(finalPrompt.contains("continuous geometry drawing conversation"));
         assertTrue(finalPrompt.contains("current canvas context"));
         assertTrue(finalPrompt.contains("only source of truth"));
@@ -127,6 +149,29 @@ class GeometryLlmClientTests {
         assertTrue(finalPrompt.contains("取AC中点D"));
         assertTrue(finalPrompt.contains("\"id\":\"A\""));
         assertTrue(finalPrompt.contains("\"id\":\"C\""));
+    }
+
+    @Test
+    void shouldSendAttachedImageAsMultimodalContent() {
+        var chatModel = new CapturingChatModel("""
+            {"mode":"instructions","responseText":"ok","instructions":[{"action":"place_point","params":{"x":0,"y":0},"result_id":"A","label":"A"}]}
+            """);
+        var client = new GeometryLlmClient(chatModel, objectMapper, "test-key", true, "workflow-body");
+
+        client.extractInstructions(
+            "根据图片画图",
+            ContextIndex.from(List.of()),
+            new ChatImagePayload("image/png", "iVBORw0KGgo=", "diagram.png")
+        );
+
+        var userMessage = (UserMessage) chatModel.messages.get(1);
+        assertEquals(2, userMessage.contents().size());
+        assertTrue(userMessage.contents().get(0) instanceof TextContent);
+        assertTrue(((TextContent) userMessage.contents().get(0)).text().contains("An image is attached"));
+        assertTrue(userMessage.contents().get(1) instanceof ImageContent);
+        var image = ((ImageContent) userMessage.contents().get(1)).image();
+        assertEquals("iVBORw0KGgo=", image.base64Data());
+        assertEquals("image/png", image.mimeType());
     }
 
     private static final class CapturingChatModel implements ChatModel {

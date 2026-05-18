@@ -31,7 +31,10 @@ function isVisible(element) {
 }
 
 function readElementLabel(element) {
-  if (!element || element.hasLabel === false) {
+  if (!element) {
+    return '';
+  }
+  if (element.hasLabel === false && !isGeneratedCircleCenter(element)) {
     return '';
   }
   if (typeof element.getName === 'function') {
@@ -66,6 +69,35 @@ function hasVisibleLabelText(element) {
   return isVisible(element?.label) && Boolean(readElementLabel(element).trim());
 }
 
+const POINT_ELEMENT_TYPES = new Set([
+  'point',
+  'glider',
+  'midpoint',
+  'intersection',
+  'otherintersection',
+  'circumcenter'
+]);
+
+function isPointElement(element) {
+  return POINT_ELEMENT_TYPES.has(element?.elType) || isGeneratedCircleCenter(element);
+}
+
+function getPointExportIds(element) {
+  return [element?.id, element?.registryId].filter(Boolean);
+}
+
+function isGeneratedCircleCenter(element) {
+  return Boolean(element?.meta?.generatedCircleCenterFor);
+}
+
+function isCircleLikeElement(element) {
+  return element?.elType === 'circle' || element?.elType === 'circumcircle' || element?.elType === 'incircle';
+}
+
+function isCircleCenterElement(element, objects) {
+  return objects.some((candidate) => isCircleLikeElement(candidate) && candidate.center === element);
+}
+
 export function collectVisibleCircleCenterIds(board) {
   if (!board?.objects) {
     return [];
@@ -74,12 +106,59 @@ export function collectVisibleCircleCenterIds(board) {
   const objects = Object.values(board.objects);
   return objects
     .filter((obj) => (
-      (obj?.elType === 'point' || obj?.elType === 'glider') &&
       obj.id &&
       hasVisibleLabelText(obj) &&
-      objects.some((candidate) => candidate?.elType === 'circle' && candidate.center === obj)
+      isCircleCenterElement(obj, objects)
     ))
     .map((obj) => obj.id);
+}
+
+function getGliderPath(glider) {
+  return glider?.slideObject || glider?.path || glider?.onPolygon || null;
+}
+
+function isCircleLikePath(path) {
+  return path?.elType === 'circle' || path?.elType === 'circumcircle' || path?.elType === 'incircle';
+}
+
+export function collectVisibleCirclePointIds(board) {
+  if (!board?.objects) {
+    return [];
+  }
+
+  return Object.values(board.objects)
+    .filter((obj) => (
+      obj?.elType === 'glider' &&
+      obj.id &&
+      isVisible(obj) &&
+      isCircleLikePath(getGliderPath(obj))
+    ))
+    .map((obj) => obj.id);
+}
+
+export function collectVisibleExplicitPointIds(board) {
+  if (!board?.objects) {
+    return [];
+  }
+
+  const objects = Object.values(board.objects);
+  return Object.values(board.objects)
+    .filter((obj) => (
+      isPointElement(obj) &&
+      obj.id &&
+      obj.registryId &&
+      isVisible(obj) &&
+      !isClosedShapeVertex(obj, objects)
+    ))
+    .map((obj) => obj.id);
+}
+
+function isClosedShapeVertex(point, objects) {
+  return objects.some((candidate) => (
+    candidate?.elType === 'polygon' &&
+    Array.isArray(candidate.vertices) &&
+    candidate.vertices.includes(point)
+  ));
 }
 
 export function collectPointLabelOverlays(board) {
@@ -87,8 +166,13 @@ export function collectPointLabelOverlays(board) {
     return [];
   }
 
-  return Object.values(board.objects)
-    .filter((obj) => (obj?.elType === 'point' || obj?.elType === 'glider') && isVisible(obj) && isVisible(obj.label))
+  const objects = Object.values(board.objects);
+  return objects
+    .filter((obj) => (
+      (isPointElement(obj) || isCircleCenterElement(obj, objects)) &&
+      isVisible(obj) &&
+      isVisible(obj.label)
+    ))
     .map((obj) => {
       const text = readElementLabel(obj).trim();
       const screenPosition = readLabelScreenPosition(obj);
@@ -127,18 +211,38 @@ export function exportBoardPreviewSvg({ board, selection }) {
 
     // Pass true to ignoreTexts to prevent foreignObject tags which taint the canvas
     // Collect all point IDs to remove them in the processor
-    const pointIds = [];
     const circleCenterIds = collectVisibleCircleCenterIds(board);
-    for (const id in board.objects) {
-      const obj = board.objects[id];
-      if (obj.elType === 'point' || obj.elType === 'glider') {
-        pointIds.push(obj.id);
+    const circlePointIds = collectVisibleCirclePointIds(board);
+    const explicitPointIds = collectVisibleExplicitPointIds(board);
+    const objects = Object.values(board.objects || {});
+    const idAliasesByPrimaryId = new Map();
+    for (const obj of objects) {
+      if (isPointElement(obj)) {
+        idAliasesByPrimaryId.set(obj.id, getPointExportIds(obj));
+      }
+    }
+    const expandIds = (ids) => [...new Set(ids.flatMap((id) => idAliasesByPrimaryId.get(id) || [id]))];
+    const expandedCircleCenterIds = expandIds(circleCenterIds);
+    const expandedCirclePointIds = expandIds(circlePointIds);
+    const expandedExplicitPointIds = expandIds(explicitPointIds);
+    const pointIds = [...expandedCircleCenterIds];
+    for (const obj of objects) {
+      if (isPointElement(obj)) {
+        pointIds.push(...getPointExportIds(obj));
       }
     }
 
     const rawSvg = decodeDataUri(board.renderer.dumpToDataURI(true));
     const processor = new SVGProcessor(rawSvg);
-    return processor.processForExam({ ...selection, board, pointIds, circleCenterIds, pointLabels });
+    return processor.processForExam({
+      ...selection,
+      board,
+      pointIds: [...new Set(pointIds)],
+      circleCenterIds: expandedCircleCenterIds,
+      circlePointIds: expandedCirclePointIds,
+      explicitPointIds: expandedExplicitPointIds,
+      pointLabels
+    });
   } finally {
     setTextDisplay(board, oldTextDisplay);
     if (board.grids) {

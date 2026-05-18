@@ -12,16 +12,19 @@ import { getNextPointLabel, openPointLabelEditor } from './labels.js';
 import {
   chooseTargetFromElements,
   getCircleSnapDistancePx,
+  isCirclePathElement,
   isWithinSnapRadius,
   isRegisteredSelectableElement,
+  LINE_TYPES,
+  PATH_SELECT_RADIUS_PX,
   PATH_SNAP_RADIUS_PX,
+  PATH_TYPES,
+  POINT_TYPES,
   preferPointSnapTarget,
+  SELECTABLE_TYPES,
   shouldUseSnapping
 } from './selection.js';
 
-const POINT_TYPES = new Set(['point', 'glider']);
-const LINE_TYPES = ['segment', 'line', 'parallel', 'perpendicular', 'bisector', 'tangent'];
-const PATH_TYPES = new Set([...LINE_TYPES, 'circle', 'ellipse', 'functiongraph']);
 const LINEAR_PATH_TYPES = new Set(LINE_TYPES);
 export const SNAP_RADIUS_PX = 14;
 const PREVIEW_ATTRS = {
@@ -89,11 +92,16 @@ export class ManualDrawingController {
     this.handleContextMenu = this.handleContextMenu.bind(this);
     this.handleKeyDown = this.handleKeyDown.bind(this);
     this.closeObjectMenu = this.closeObjectMenu.bind(this);
+    this.contextMenuTarget = this.getBoardContainer();
+    this.documentContextMenuTarget = typeof document !== 'undefined' ? document : null;
 
     this.board.on('down', this.handleDown);
     this.board.on('move', this.handleMove);
     this.board.on('up', this.handleUp);
-    this.board.containerObj?.addEventListener('contextmenu', this.handleContextMenu);
+    this.contextMenuTarget?.addEventListener('contextmenu', this.handleContextMenu);
+    if (this.documentContextMenuTarget && this.documentContextMenuTarget !== this.contextMenuTarget) {
+      this.documentContextMenuTarget.addEventListener('contextmenu', this.handleContextMenu, true);
+    }
     window.addEventListener('keydown', this.handleKeyDown);
     window.addEventListener('pointerdown', this.closeObjectMenu);
   }
@@ -104,9 +112,30 @@ export class ManualDrawingController {
     this.board.off('down', this.handleDown);
     this.board.off('move', this.handleMove);
     this.board.off('up', this.handleUp);
-    this.board.containerObj?.removeEventListener('contextmenu', this.handleContextMenu);
+    this.contextMenuTarget?.removeEventListener('contextmenu', this.handleContextMenu);
+    if (this.documentContextMenuTarget && this.documentContextMenuTarget !== this.contextMenuTarget) {
+      this.documentContextMenuTarget.removeEventListener('contextmenu', this.handleContextMenu, true);
+    }
     window.removeEventListener('keydown', this.handleKeyDown);
     window.removeEventListener('pointerdown', this.closeObjectMenu);
+  }
+
+  getBoardContainer() {
+    const containerCandidates = [
+      this.board?.containerObj,
+      this.board?.containerObj?.rendNode,
+      this.board?.container
+    ];
+    const directContainer = containerCandidates.find((candidate) => (
+      candidate && typeof candidate.addEventListener === 'function'
+    ));
+    if (directContainer) {
+      return directContainer;
+    }
+    if (typeof this.board?.container === 'string' && typeof document !== 'undefined') {
+      return document.getElementById(this.board.container);
+    }
+    return null;
   }
 
   setActiveTool(tool) {
@@ -133,6 +162,17 @@ export class ManualDrawingController {
   }
 
   handleKeyDown(event) {
+    if (
+      this.activeTool === TOOLS.SELECT &&
+      this.state.selectedObject &&
+      (event.key === 'Delete' || event.key === 'Backspace') &&
+      !this.isTypingTarget(event.target)
+    ) {
+      event.preventDefault();
+      this.deleteObject();
+      return;
+    }
+
     if (event.key !== 'Escape') {
       return;
     }
@@ -329,7 +369,7 @@ export class ManualDrawingController {
   }
 
   handleSelectTool(event) {
-    const target = this.getTargetUnderMouse(event, { includeShapes: true }) || this.getNearestSnapTarget(event, { includePath: true });
+    const target = this.getTargetUnderMouse(event, { includeShapes: true }) || this.getNearestSelectableTarget(event, { includeShapes: true });
     if (!target) {
       this.clearSelection();
       this.closeObjectMenu();
@@ -344,10 +384,7 @@ export class ManualDrawingController {
     if (this.activeTool !== TOOLS.SELECT) {
       return;
     }
-
-    const target = this.getTargetUnderMouse(event, { includeShapes: true }) || this.getNearestSnapTarget(event, { includePath: true });
-    if (!target) {
-      this.closeObjectMenu();
+    if (!this.isBoardEvent(event)) {
       return;
     }
 
@@ -358,8 +395,29 @@ export class ManualDrawingController {
       event.stopPropagation();
     }
 
+    const target = this.getTargetUnderMouse(event, { includeShapes: true }) || this.getNearestSelectableTarget(event, { includeShapes: true });
+    if (!target) {
+      this.closeObjectMenu();
+      return;
+    }
+
     this.selectObject(target.obj);
     this.showObjectMenu(event, target.obj);
+  }
+
+  isBoardEvent(event) {
+    const target = event?.target;
+    if (!target || !this.contextMenuTarget || typeof this.contextMenuTarget.contains !== 'function') {
+      return true;
+    }
+    return target === this.contextMenuTarget || this.contextMenuTarget.contains(target);
+  }
+
+  isTypingTarget(target) {
+    if (!target || typeof target.closest !== 'function') {
+      return false;
+    }
+    return Boolean(target.closest('input, textarea, [contenteditable="true"]'));
   }
 
   isNonPrimaryMouseButton(event) {
@@ -765,6 +823,63 @@ export class ManualDrawingController {
     return nearest;
   }
 
+  getNearestSelectableTarget(event, options = {}) {
+    const mouse = this.getMousePosition(event);
+    let nearest = null;
+
+    this.registry.entries().forEach(([, obj]) => {
+      if (!this.isSelectableElement(obj)) {
+        return;
+      }
+
+      const type = this.getSelectableTargetType(obj, options);
+      if (!type) {
+        return;
+      }
+
+      const distance = type === 'point'
+        ? this.distanceToPointPx(mouse, obj)
+        : type === 'path'
+          ? this.distanceToPathPx(mouse, obj)
+          : this.distanceToShapePx(mouse, obj);
+      const radius = type === 'point' ? SNAP_RADIUS_PX : PATH_SELECT_RADIUS_PX;
+      if (isWithinSnapRadius(distance, radius)) {
+        nearest = this.preferSelectableTarget(nearest, { type, obj, distance });
+      }
+    });
+
+    return nearest;
+  }
+
+  getSelectableTargetType(obj, options = {}) {
+    if (POINT_TYPES.has(obj?.elType)) {
+      return 'point';
+    }
+    if (PATH_TYPES.has(obj?.elType)) {
+      return 'path';
+    }
+    if (options.includeShapes && SELECTABLE_TYPES.has(obj?.elType)) {
+      return 'shape';
+    }
+    return null;
+  }
+
+  preferSelectableTarget(current, candidate) {
+    if (!candidate) {
+      return current;
+    }
+    if (!current) {
+      return candidate;
+    }
+    if (candidate.type === 'point' && current.type !== 'point') {
+      return candidate;
+    }
+    if (current.type === 'point' && candidate.type !== 'point') {
+      return current;
+    }
+    return candidate.distance < current.distance ? candidate : current;
+  }
+
   getMousePosition(event) {
     const coords = this.board.getUsrCoordsOfMouse(event);
     return { x: coords[0], y: coords[1] };
@@ -779,7 +894,7 @@ export class ManualDrawingController {
   }
 
   distanceToPathPx(mouse, path) {
-    if (path?.elType === 'circle') {
+    if (isCirclePathElement(path)) {
       return getCircleSnapDistancePx(path, mouse, (coords) => this.toScreenCoords(coords));
     }
 
@@ -788,6 +903,45 @@ export class ManualDrawingController {
       return 0;
     }
     return Number.POSITIVE_INFINITY;
+  }
+
+  distanceToShapePx(mouse, shape) {
+    const screen = this.toScreenCoords(mouse);
+    if (typeof shape?.hasPoint === 'function' && shape.hasPoint(screen.x, screen.y)) {
+      return 0;
+    }
+    if (shape?.elType === 'polygon' && this.isPointInsidePolygonScreen(screen, shape.vertices)) {
+      return 0;
+    }
+    return Number.POSITIVE_INFINITY;
+  }
+
+  isPointInsidePolygonScreen(point, vertices) {
+    if (!Array.isArray(vertices) || vertices.length < 3) {
+      return false;
+    }
+    const polygon = vertices
+      .filter((vertex) => vertex && typeof vertex.X === 'function' && typeof vertex.Y === 'function')
+      .map((vertex) => this.toScreenCoords({ x: vertex.X(), y: vertex.Y() }))
+      .filter((vertex) => Number.isFinite(vertex.x) && Number.isFinite(vertex.y));
+    if (polygon.length < 3) {
+      return false;
+    }
+
+    let inside = false;
+    for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index, index += 1) {
+      const currentVertex = polygon[index];
+      const previousVertex = polygon[previous];
+      const intersects = (
+        currentVertex.y > point.y
+      ) !== (
+        previousVertex.y > point.y
+      ) && point.x < ((previousVertex.x - currentVertex.x) * (point.y - currentVertex.y)) / (previousVertex.y - currentVertex.y) + currentVertex.x;
+      if (intersects) {
+        inside = !inside;
+      }
+    }
+    return inside;
   }
 
   distanceToPointPx(mouse, point) {

@@ -39,6 +39,10 @@ record ChatResponse(
     static ChatResponse error(String responseText) {
         return new ChatResponse("error", List.of(), responseText, null);
     }
+
+    static ChatResponse message(String responseText) {
+        return new ChatResponse("message", List.of(), responseText, null);
+    }
 }
 
 record DrawingInstruction(
@@ -152,7 +156,7 @@ record CanvasObject(
 
     private String typeDescription() {
         return switch (type) {
-            case "point", "glider" -> "点";
+            case "point", "glider", "circumcenter", "incenter", "midpoint", "intersection", "otherintersection" -> "点";
             case "circle", "circumcircle", "incircle" -> "圆";
             case "segment", "line", "parallel", "perpendicular", "tangent" -> "线";
             default -> type;
@@ -218,6 +222,10 @@ record GeometryAiResponse(String mode, String responseText, List<DrawingInstruct
 
     static GeometryAiResponse error(String responseText) {
         return new GeometryAiResponse("error", responseText, List.of(), null);
+    }
+
+    static GeometryAiResponse message(String responseText) {
+        return new GeometryAiResponse("message", responseText, List.of(), null);
     }
 }
 

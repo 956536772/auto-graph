@@ -7,6 +7,7 @@ import { TOOLS } from './lib/manualTools/constants.js';
 import { ensurePointLabelEditor, getNextPointLabel } from './lib/manualTools/labels.js';
 import { exportBoardPreviewSvg, svgToObjectUrl } from './lib/previewExport.js';
 import { buildChatRequestPayload, INITIAL_AI_MESSAGE } from './lib/chatPayload.js';
+import { apiUrl } from './lib/api.js';
 import './App.css';
 
 const INITIAL_BOUNDING_BOX = [-10, 10, 10, -10];
@@ -61,7 +62,7 @@ const TOOL_GROUPS = [
 ];
 
 const TOOL_GUIDES = {
-  [TOOLS.SELECT]: '选择对象；右键对象打开删除菜单，拖动画布可平移。',
+  [TOOLS.SELECT]: '选择对象；右键对象打开删除菜单，也可按 Delete 删除，拖动画布可平移。',
   [TOOLS.POINT]: '点击空白处创建点；贴近已有线或圆时会自动吸附。',
   [TOOLS.SEGMENT]: '依次点击点创建连续线段；回到起点可封闭成图形，Esc 结束。',
   [TOOLS.CIRCLE]: '按住拖拽确定圆心和半径。',
@@ -75,14 +76,11 @@ const TOOL_GUIDES = {
   [TOOLS.ANGLE_BISECTOR]: '依次选择边点、顶点、边点，生成角平分线。'
 };
 
-const PROMPT_SUGGESTIONS = [
-  '画一个三角形 ABC，并作它的外接圆',
-  '画出 y = x^2 的图像',
-  '过圆上一点作切线'
-];
-
 const MAX_CHAT_IMAGE_BYTES = 4 * 1024 * 1024;
 const SUPPORTED_CHAT_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const READY_STATUS = '就绪-请在右侧输入绘图需求';
+const MOBILE_READY_STATUS = '请在下方输入绘图需求';
+const CHAT_INPUT_PLACEHOLDER = '请输入绘图要求或上传图片';
 
 const initialMessages = () => [{ ...INITIAL_AI_MESSAGE }];
 
@@ -268,7 +266,7 @@ export default function App() {
   const controllerRef = useRef(null);
   const chatMessagesRef = useRef(null);
   const [activeTool, setActiveTool] = useState(TOOLS.SELECT);
-  const [status, setStatus] = useState('就绪 - 请在右侧输入绘图需求');
+  const [status, setStatus] = useState(READY_STATUS);
   const [messages, setMessages] = useState(initialMessages);
   const [inputText, setInputText] = useState('');
   const [attachedImage, setAttachedImage] = useState(null);
@@ -414,9 +412,7 @@ export default function App() {
     setStatus('视图已复位');
   };
 
-  const handleAttachImage = async (event) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
+  const attachImageFile = async (file) => {
     if (!file) {
       return;
     }
@@ -431,6 +427,31 @@ export default function App() {
     }
   };
 
+  const handleAttachImage = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    await attachImageFile(file);
+  };
+
+  const handleComposerPaste = async (event) => {
+    const imageFile = Array.from(event.clipboardData?.files || [])
+      .find((file) => file.type.startsWith('image/'));
+    if (!imageFile) {
+      return;
+    }
+
+    event.preventDefault();
+    await attachImageFile(imageFile);
+  };
+
+  const handleComposerKeyDown = (event) => {
+    if (event.key !== 'Enter' || !event.shiftKey) {
+      return;
+    }
+    event.preventDefault();
+    handleSendMessage();
+  };
+
   const handleSendMessage = async () => {
     const text = inputText.trim();
     if (isSending) {
@@ -442,15 +463,20 @@ export default function App() {
     }
 
     const requestImage = attachedImage;
-    const userText = text || '请根据图片绘制几何图形';
+    const userText = text || '请分析这张图片；如果它包含可绘制的几何图形，请说明可绘制的构图。';
     setIsSending(true);
-    setMessages((prev) => [...prev, { role: 'user', text: userText, imageName: requestImage?.name }]);
+    setMessages((prev) => [...prev, {
+      role: 'user',
+      text: userText,
+      imageName: requestImage?.name,
+      imagePreviewUrl: requestImage?.previewUrl
+    }]);
     setInputText('');
     setAttachedImage(null);
-    setStatus('AI 正在分析题意并绘图...');
+    setStatus(requestImage ? 'AI 正在分析图片和题意...' : 'AI 正在分析题意并绘图...');
 
     try {
-      const response = await fetch('http://localhost:8080/api/chat', {
+      const response = await fetch(apiUrl('/api/chat'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildChatRequestPayload({
@@ -461,7 +487,8 @@ export default function App() {
       });
       const data = await response.json();
 
-      if (data.instructions && data.instructions.length > 0) {
+      const instructions = data.instructions || [];
+      if (instructions.length > 0) {
         engineRef.current.execute(data.instructions);
       }
 
@@ -469,6 +496,8 @@ export default function App() {
       if (!aiText) {
         if (data.status === 'instructions') {
           aiText = '已根据你的描述执行了绘图操作。';
+        } else if (data.status === 'message') {
+          aiText = '已根据图片和问题完成分析。';
         } else if (data.status === 'clarification') {
           aiText = data.clarification?.question || '我需要你进一步明确绘图意图。';
         } else if (data.status === 'error') {
@@ -482,8 +511,10 @@ export default function App() {
         setStatus('需要澄清 - 请补充说明后再发送');
       } else if (data.status === 'error') {
         setStatus('未执行 - 请调整描述');
+      } else if (data.status === 'message') {
+        setStatus('已完成图片对话');
       } else {
-        setStatus('就绪');
+        setStatus(READY_STATUS);
       }
     } catch (error) {
       console.error(error);
@@ -546,7 +577,14 @@ export default function App() {
 
       <div id="status-bar" className={`floating-panel ${statusTone}`}>
         <span className="status-dot"></span>
-        <span>{status}</span>
+        {status === READY_STATUS ? (
+          <>
+            <span className="ready-status-desktop">{READY_STATUS}</span>
+            <span className="ready-status-mobile">{MOBILE_READY_STATUS}</span>
+          </>
+        ) : (
+          <span className="status-text">{status}</span>
+        )}
       </div>
 
       <div id="tool-hint" className="floating-panel">
@@ -574,49 +612,47 @@ export default function App() {
           {messages.map((message, index) => (
             <div key={index} className={`message ${message.role}`}>
               <div>{message.text}</div>
+              {message.imagePreviewUrl && (
+                <img className="message-image-preview" src={message.imagePreviewUrl} alt={message.imageName || '对话图片'} />
+              )}
               {message.imageName && (
                 <div className="message-attachment">图片：{message.imageName}</div>
               )}
             </div>
           ))}
         </div>
-        <div id="prompt-suggestions" aria-label="示例指令">
-          {PROMPT_SUGGESTIONS.map((suggestion) => (
-            <button key={suggestion} onClick={() => setInputText(suggestion)}>
-              {suggestion}
-            </button>
-          ))}
-        </div>
         <div id="chat-input-area">
-          {attachedImage && (
-            <div className="chat-attachment-preview">
-              <img src={attachedImage.previewUrl} alt="待发送图片预览" />
-              <span>{attachedImage.name}</span>
-              <button type="button" onClick={() => setAttachedImage(null)} aria-label="移除图片">移除</button>
-            </div>
-          )}
           {isSending && (
             <div className="chat-draft-note">上一轮生成中；你可以继续编辑下一题，结果返回后再手动发送。</div>
           )}
           <div className="chat-compose-row">
-            <label className="attach-image-btn" htmlFor="chat-image-input">图片</label>
             <input
               type="file"
               id="chat-image-input"
               accept="image/png,image/jpeg,image/webp,image/gif"
               onChange={handleAttachImage}
             />
-            <input
-              type="text"
-              id="chat-input"
-              placeholder={isSending ? '先写下一题，等待结果返回后发送...' : '描述题目意图...'}
-              value={inputText}
-              onChange={(event) => setInputText(event.target.value)}
-              onKeyDown={(event) => event.key === 'Enter' && handleSendMessage()}
-            />
-            <button id="send-btn" disabled={!canSend} onClick={handleSendMessage}>
-              {sendButtonLabel}
-            </button>
+            <div className={`chat-textarea-shell ${attachedImage ? 'has-attachment' : ''}`}>
+              {attachedImage && (
+                <div className="chat-attachment-preview" title={attachedImage.name}>
+                  <img src={attachedImage.previewUrl} alt="待发送图片预览" />
+                  <button type="button" onClick={() => setAttachedImage(null)} aria-label="移除图片">×</button>
+                </div>
+              )}
+              <textarea
+                id="chat-input"
+                rows={3}
+                placeholder={CHAT_INPUT_PLACEHOLDER}
+                value={inputText}
+                onChange={(event) => setInputText(event.target.value)}
+                onPaste={handleComposerPaste}
+                onKeyDown={handleComposerKeyDown}
+              ></textarea>
+              <button id="send-btn" disabled={!canSend} onClick={handleSendMessage}>
+                {sendButtonLabel}
+              </button>
+              <label className="attach-image-btn" htmlFor="chat-image-input" aria-label="添加图片">＋</label>
+            </div>
           </div>
         </div>
       </div>
