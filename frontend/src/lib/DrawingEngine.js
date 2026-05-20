@@ -16,57 +16,93 @@ export class DrawingEngine {
         });
     }
     execute(instructions) {
-        const created = [];
+        const results = [];
         this.registry.beginUndoBatch?.();
-        this.board.suspendUpdate();
+        this.board.suspendUpdate?.();
         try {
-            instructions.forEach((ins) => {
-                const obj = this.processInstruction(ins);
-                if (obj) {
-                    created.push({ instruction: ins, object: obj });
+            (instructions || []).forEach((ins) => {
+                try {
+                    const obj = this.processInstruction(ins);
+                    results.push({
+                        instruction: ins,
+                        action: ins?.action || '',
+                        object: obj || null,
+                        success: true
+                    });
+                } catch (err) {
+                    console.error('指令执行失败:', err);
+                    results.push({
+                        instruction: ins,
+                        action: ins?.action || '',
+                        object: null,
+                        success: false,
+                        error: this.executionErrorMessage(err)
+                    });
                 }
             });
-        } catch (err) {
-            console.error('指令执行失败:', err);
         } finally {
-            this.board.unsuspendUpdate();
+            this.board.unsuspendUpdate?.();
             this.registry.endUndoBatch?.();
         }
-        return created;
+        return this.decorateExecutionResults(results);
     }
     processInstruction(ins) {
-        const { action, params, result_id, label, meta } = ins;
+        if (!ins || !ins.action) {
+            throw new Error('unsupported action');
+        }
+        const { action, params = {}, result_id, label, meta } = ins;
         let obj = null;
         const commonAttr = this.getCommonAttributes(label);
+        const objectlessAction = action === 'show_axis' || action === 'delete_object';
+        if (!objectlessAction && !result_id) {
+            throw new Error('missing result_id');
+        }
 
-        try {
-            switch (action) {
+        switch (action) {
                 case 'place_point':
-                    obj = this.board.create('point', [params.x, params.y], commonAttr);
+                    obj = this.board.create('point', [
+                        this.requireNumberParam(params, 'x'),
+                        this.requireNumberParam(params, 'y')
+                    ], commonAttr);
                     break;
                 case 'segment':
-                    obj = this.board.create('segment', [this.resolveRef(params.p1), this.resolveRef(params.p2)], {
+                    obj = this.board.create('segment', [
+                        this.resolveRequiredRef(params.p1, 'p1'),
+                        this.resolveRequiredRef(params.p2, 'p2')
+                    ], {
                         ...commonAttr, draggable: true
                     });
                     this.addHoverCursor(obj);
                     break;
                 case 'line':
-                    obj = this.board.create('line', [this.resolveRef(params.p1), this.resolveRef(params.p2)], {
+                    obj = this.board.create('line', [
+                        this.resolveRequiredRef(params.p1, 'p1'),
+                        this.resolveRequiredRef(params.p2, 'p2')
+                    ], {
                         ...commonAttr, draggable: true
                     });
                     this.addHoverCursor(obj);
                     break;
                 case 'midpoint':
-                    obj = this.board.create('midpoint', [this.resolveRef(params.p1), this.resolveRef(params.p2)], commonAttr);
+                    obj = this.board.create('midpoint', [
+                        this.resolveRequiredRef(params.p1, 'p1'),
+                        this.resolveRequiredRef(params.p2, 'p2')
+                    ], commonAttr);
                     break;
                 case 'perpendicular':
-                    obj = this.board.create('perpendicular', [this.resolveRef(params.line), this.resolveRef(params.point)], {
+                    obj = this.board.create('perpendicular', [
+                        this.resolveRequiredRef(params.line, 'line'),
+                        this.resolveRequiredRef(params.point, 'point')
+                    ], {
                         ...commonAttr, draggable: true
                     });
                     this.addHoverCursor(obj);
                     break;
                 case 'parallel':
-                    obj = this.board.create('parallel', [this.resolveRef(params.line), this.resolveRef(params.point)], {
+                    obj = this.board.create('parallel', [
+                        this.resolveRequiredRef(params.line, 'line'),
+                        this.resolveRequiredRef(params.point, 'point')
+                    ], {
                         ...commonAttr, draggable: true
                     });
                     this.addHoverCursor(obj);
@@ -77,7 +113,13 @@ export class DrawingEngine {
                     let hiddenControlPoints = null;
 
                     if (typeof params.cx === 'number' && typeof params.cy === 'number' && typeof params.radius === 'number') {
-                        center = this.board.create('point', [params.cx, params.cy], {
+                        const cx = this.requireNumberParam(params, 'cx');
+                        const cy = this.requireNumberParam(params, 'cy');
+                        const radius = this.requireNumberParam(params, 'radius');
+                        if (radius <= 0) {
+                            throw new Error('invalid radius');
+                        }
+                        center = this.board.create('point', [cx, cy], {
                             ...commonAttr,
                             name: params.centerLabel || '',
                             withLabel: Boolean(params.centerLabel),
@@ -86,7 +128,7 @@ export class DrawingEngine {
                             highlight: false,
                             showInfobox: false
                         });
-                        through = this.board.create('point', [params.cx + params.radius, params.cy], {
+                        through = this.board.create('point', [cx + radius, cy], {
                             visible: false,
                             name: '',
                             fixed: true,
@@ -95,15 +137,15 @@ export class DrawingEngine {
                         });
                         hiddenControlPoints = [through];
                     } else {
-                        center = this.resolveRef(params.center);
-                        through = this.resolveRef(params.through);
+                        center = this.resolveRequiredRef(params.center, 'center');
+                        through = this.resolveRequiredRef(params.through, 'through');
                     }
 
                     obj = this.board.create('circle', [center, through], {
                         ...commonAttr, draggable: true, hasInnerPoints: true,
                         fillColor: '#1890ff', fillOpacity: 0.1
                     });
-                    if (hiddenControlPoints) {
+                    if (obj && hiddenControlPoints) {
                         this.attachTranslationDrag(obj, [center, ...hiddenControlPoints]);
                         obj.on('remove', () => {
                             hiddenControlPoints.forEach((point) => this.safeRemoveObject(point));
@@ -114,9 +156,9 @@ export class DrawingEngine {
                 }
                 case 'circumcircle':
                     obj = this.board.create('circumcircle', [
-                        this.resolveRef(params.p1),
-                        this.resolveRef(params.p2),
-                        this.resolveRef(params.p3)
+                        this.resolveRequiredRef(params.p1, 'p1'),
+                        this.resolveRequiredRef(params.p2, 'p2'),
+                        this.resolveRequiredRef(params.p3, 'p3')
                     ], {
                         ...commonAttr, draggable: true, hasInnerPoints: true,
                         fillColor: '#1890ff', fillOpacity: 0.1
@@ -125,9 +167,9 @@ export class DrawingEngine {
                     break;
                 case 'incircle':
                     obj = this.board.create('incircle', [
-                        this.resolveRef(params.p1),
-                        this.resolveRef(params.p2),
-                        this.resolveRef(params.p3)
+                        this.resolveRequiredRef(params.p1, 'p1'),
+                        this.resolveRequiredRef(params.p2, 'p2'),
+                        this.resolveRequiredRef(params.p3, 'p3')
                     ], {
                         ...commonAttr, draggable: true, hasInnerPoints: true,
                         fillColor: '#1890ff', fillOpacity: 0.1
@@ -135,7 +177,10 @@ export class DrawingEngine {
                     this.addHoverCursor(obj);
                     break;
                 case 'ellipse': {
-                    const { cx, cy, rx, ry } = params;
+                    const cx = this.requireNumberParam(params, 'cx');
+                    const cy = this.requireNumberParam(params, 'cy');
+                    const rx = this.requireNumberParam(params, 'rx');
+                    const ry = this.requireNumberParam(params, 'ry');
                     if (Math.abs(rx - ry) < 0.001) {
                         const pCenter = this.board.create('point', [cx, cy], { visible: false, name: '' });
                         const pThrough = this.board.create('point', [cx + rx, cy], { visible: false, name: '' });
@@ -143,11 +188,13 @@ export class DrawingEngine {
                             ...commonAttr, draggable: true, hasInnerPoints: true,
                             fillColor: '#1890ff', fillOpacity: 0.1
                         });
-                        this.attachTranslationDrag(obj, [pCenter, pThrough]);
-                        obj.on('remove', () => {
-                            this.safeRemoveObject(pCenter);
-                            this.safeRemoveObject(pThrough);
-                        });
+                        if (obj) {
+                            this.attachTranslationDrag(obj, [pCenter, pThrough]);
+                            obj.on('remove', () => {
+                                this.safeRemoveObject(pCenter);
+                                this.safeRemoveObject(pThrough);
+                            });
+                        }
                     } else {
                         const c = Math.sqrt(Math.abs(rx * rx - ry * ry));
                         let f1;
@@ -166,18 +213,23 @@ export class DrawingEngine {
                             ...commonAttr, draggable: true, hasInnerPoints: true,
                             fillColor: '#1890ff', fillOpacity: 0.1
                         });
-                        this.attachTranslationDrag(obj, [f1, f2, pointOnEllipse]);
-                        obj.on('remove', () => {
-                            this.safeRemoveObject(f1);
-                            this.safeRemoveObject(f2);
-                            this.safeRemoveObject(pointOnEllipse);
-                        });
+                        if (obj) {
+                            this.attachTranslationDrag(obj, [f1, f2, pointOnEllipse]);
+                            obj.on('remove', () => {
+                                this.safeRemoveObject(f1);
+                                this.safeRemoveObject(f2);
+                                this.safeRemoveObject(pointOnEllipse);
+                            });
+                        }
                     }
                     this.addHoverCursor(obj);
                     break;
                 }
                 case 'polygon': {
-                    const pts = params.points.map(id => this.resolveRef(id));
+                    if (!Array.isArray(params.points) || params.points.length < 3) {
+                        throw new Error('missing points');
+                    }
+                    const pts = params.points.map((id) => this.resolveRequiredRef(id, 'points'));
                     obj = this.board.create('polygon', pts, {
                         ...commonAttr, fillColor: '#1890ff', fillOpacity: 0.2,
                         draggable: true, hasInnerPoints: true
@@ -186,30 +238,34 @@ export class DrawingEngine {
                     break;
                 }
                 case 'glider':
-                    obj = this.board.create('glider', [params.x, params.y, this.resolveRef(params.path)], {
+                    obj = this.board.create('glider', [
+                        this.requireNumberParam(params, 'x'),
+                        this.requireNumberParam(params, 'y'),
+                        this.resolveRequiredRef(params.path, 'path')
+                    ], {
                         ...commonAttr, strokeColor: '#ff4d4f', fillColor: '#fff'
                     });
                     break;
                 case 'intersection': {
                     obj = this.board.create('intersection', [
-                        this.resolveRef(params.first),
-                        this.resolveRef(params.second),
+                        this.resolveRequiredRef(params.first, 'first'),
+                        this.resolveRequiredRef(params.second, 'second'),
                         params.index ?? 0
                     ], commonAttr);
                     break;
                 }
                 case 'otherintersection': {
                     obj = this.board.create('otherintersection', [
-                        this.resolveRef(params.first),
-                        this.resolveRef(params.second),
-                        this.resolveRef(params.known)
+                        this.resolveRequiredRef(params.first, 'first'),
+                        this.resolveRequiredRef(params.second, 'second'),
+                        this.resolveRequiredRef(params.known, 'known')
                     ], commonAttr);
                     break;
                 }
                 case 'tangent':
                     obj = this.board.create('tangent', [
-                        this.resolveRef(params.circle),
-                        this.resolveRef(params.point)
+                        this.resolveRequiredRef(params.circle, 'circle'),
+                        this.resolveRequiredRef(params.point, 'point')
                     ], {
                         ...commonAttr, draggable: true
                     });
@@ -217,9 +273,9 @@ export class DrawingEngine {
                     break;
                 case 'bisector':
                     obj = this.board.create('bisector', [
-                        this.resolveRef(params.p1),
-                        this.resolveRef(params.vertex),
-                        this.resolveRef(params.p2)
+                        this.resolveRequiredRef(params.p1, 'p1'),
+                        this.resolveRequiredRef(params.vertex, 'vertex'),
+                        this.resolveRequiredRef(params.p2, 'p2')
                     ], {
                         ...commonAttr, draggable: true
                     });
@@ -227,9 +283,9 @@ export class DrawingEngine {
                     break;
                 case 'angle':
                     obj = this.board.create('angle', [
-                        this.resolveRef(params.p1),
-                        this.resolveRef(params.vertex),
-                        this.resolveRef(params.p2)
+                        this.resolveRequiredRef(params.p1, 'p1'),
+                        this.resolveRequiredRef(params.vertex, 'vertex'),
+                        this.resolveRequiredRef(params.p2, 'p2')
                     ], {
                         ...commonAttr,
                         radius: 1,
@@ -240,12 +296,17 @@ export class DrawingEngine {
                     });
                     break;
                 case 'function_graph':
+                    if (typeof params.expr !== 'string' || !params.expr.trim()) {
+                        throw new Error('missing expr');
+                    }
                     obj = this.board.create('functiongraph', [new Function('x', `return ${params.expr};`)], {
                         ...commonAttr,
                         strokeColor: '#1890ff',
                         strokeWidth: 2
                     });
-                    obj.meta = { ...(obj.meta || {}), expr: params.expr };
+                    if (obj) {
+                        obj.meta = { ...(obj.meta || {}), expr: params.expr };
+                    }
                     break;
                 case 'show_axis': {
                     const visible = params.visible !== false;
@@ -260,11 +321,18 @@ export class DrawingEngine {
                     break;
                 }
                 case 'delete_object':
-                    this.registry.removeById?.(this.board, params.target);
+                    if (!params.target) {
+                        throw new Error('missing target');
+                    }
+                    if (!this.registry.removeById?.(this.board, params.target)) {
+                        throw new Error(`unknown reference: ${params.target}`);
+                    }
                     break;
+                default:
+                    throw new Error(`unsupported action: ${action}`);
             }
-        } catch (e) {
-            console.error('创建形状失败:', e);
+        if (!objectlessAction && !obj) {
+            throw new Error(`JSXGraph did not create object for action: ${action}`);
         }
 
         if (obj && result_id) {
@@ -282,6 +350,22 @@ export class DrawingEngine {
         }
 
         return obj;
+    }
+    decorateExecutionResults(results) {
+        results.created = results.filter((result) => result.object);
+        results.failed = results.filter((result) => !result.success);
+        results.success = results.failed.length === 0;
+        return results;
+    }
+    executionErrorMessage(error) {
+        return error instanceof Error ? error.message : String(error);
+    }
+    requireNumberParam(params, key) {
+        const value = params?.[key];
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+            throw new Error(`missing numeric param: ${key}`);
+        }
+        return value;
     }
     getCommonAttributes(label) {
         return {
@@ -692,6 +776,9 @@ export class DrawingEngine {
         return this.registry.idForObject(ref);
     }
     addHoverCursor(obj) {
+        if (!obj) {
+            return;
+        }
         obj.on('over', () => { document.body.style.cursor = 'move'; });
         obj.on('out', () => { document.body.style.cursor = 'default'; });
     }
@@ -721,6 +808,13 @@ export class DrawingEngine {
             return null;
         }
         return typeof ref === 'string' ? this.registry.get(ref) : ref;
+    }
+    resolveRequiredRef(ref, fieldName) {
+        const resolved = this.resolveRef(ref);
+        if (!resolved) {
+            throw new Error(`missing reference: ${fieldName}`);
+        }
+        return resolved;
     }
     safeRemoveObject(obj) {
         if (!obj) {

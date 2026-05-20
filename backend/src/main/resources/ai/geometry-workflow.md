@@ -122,7 +122,9 @@ High-level actions are allowed for word-problem drawing. The backend will expand
 ## Instruction Rules
 
 * Every creation instruction must include a non-empty unique `result_id`.
-* `delete_object` edits an existing object and must omit `result_id`.
+* Non-creation actions do not create canvas objects and must omit `result_id`.
+* `show_axis` edits axis visibility only.
+* `delete_object` edits an existing object only.
 * References must point to either an object already present in canvas context or a `result_id` created by an earlier instruction in the same response.
 * Do not reference a result before it is created.
 * Default labeling rule: only point-creating instructions should carry `label`.

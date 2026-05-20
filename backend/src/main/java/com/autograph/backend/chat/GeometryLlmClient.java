@@ -217,12 +217,20 @@ public class GeometryLlmClient {
         var instructions = new ArrayList<DrawingInstruction>();
         for (var node : instructionsNode) {
             var action = node.path("action").asText("");
-            var params = objectMapper.convertValue(node.path("params"), Map.class);
-            var resultId = node.path("result_id").asText(null);
+            var paramsNode = node.path("params");
+            var params = paramsNode.isObject() ? objectMapper.convertValue(paramsNode, Map.class) : Map.of();
+            var resultId = textField(node, "result_id");
+            if (resultId == null) {
+                resultId = textField(node, "resultId");
+            }
             var label = node.hasNonNull("label") ? node.path("label").asText() : null;
             instructions.add(new DrawingInstruction(action, params == null ? Map.of() : params, resultId, label));
         }
         return instructions;
+    }
+
+    private String textField(JsonNode node, String fieldName) {
+        return node.hasNonNull(fieldName) && node.get(fieldName).isTextual() ? node.get(fieldName).asText() : null;
     }
 
     private Clarification parseClarification(JsonNode responseJson, String fallbackQuestion) {

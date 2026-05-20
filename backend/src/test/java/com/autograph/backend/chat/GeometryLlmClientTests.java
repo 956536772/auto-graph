@@ -54,6 +54,19 @@ class GeometryLlmClientTests {
     }
 
     @Test
+    void shouldParseCamelCaseResultIdAlias() {
+        var chatModel = new CapturingChatModel("""
+            {"mode":"instructions","responseText":"ok","instructions":[{"action":"place_point","params":{"x":0,"y":0},"resultId":"A","label":"A"}]}
+            """);
+        var client = new GeometryLlmClient(chatModel, objectMapper, "test-key", true, "workflow-body");
+
+        var result = client.extractInstructions("画点A", ContextIndex.from(List.of()));
+
+        assertEquals(LlmDirectStatus.SUCCESS, result.status());
+        assertEquals("A", result.response().instructions().get(0).resultId());
+    }
+
+    @Test
     void shouldParseMessageModeForImageConversation() {
         var chatModel = new CapturingChatModel("""
             {"mode":"message","responseText":"这张图展示了一个三角形和它的外接圆。"}

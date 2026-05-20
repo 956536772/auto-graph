@@ -57,7 +57,7 @@ final class GeometryInstructionExpander {
         if (instruction == null || instruction.action() == null) {
             return StepExpansion.invalid("unsupported_action");
         }
-        if ("delete_object".equals(instruction.action())) {
+        if ("delete_object".equals(instruction.action()) || "show_axis".equals(instruction.action())) {
             return StepExpansion.ok(List.of(instruction), List.of());
         }
         if (GeometryCapabilityContract.isSupportedBaseAction(instruction.action())) {

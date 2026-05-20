@@ -75,6 +75,21 @@ class GeometryChatServiceTests {
     }
 
     @Test
+    void shouldAllowShowAxisWithoutResultId() {
+        var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
+            new DrawingInstruction("show_axis", Map.of("visible", true), null, null),
+            new DrawingInstruction("function_graph", Map.of("expr", "x*x"), "graph_1", null)
+        ), "已显示坐标轴并绘制函数图像。")));
+
+        var response = service.handle(new ChatRequest("画出 y=x^2"));
+
+        assertEquals("instructions", response.status());
+        assertEquals(List.of("show_axis", "function_graph"), response.instructions().stream().map(DrawingInstruction::action).toList());
+        assertEquals(Map.of("visible", true), response.instructions().get(0).params());
+        assertEquals(null, response.instructions().get(0).resultId());
+    }
+
+    @Test
     void shouldClarifyAmbiguousDeleteTargetLabels() {
         var service = serviceReturning(LlmDirectResult.success(GeometryAiResponse.instructions(List.of(
             new DrawingInstruction("delete_object", Map.of("target", "A"), null, null)

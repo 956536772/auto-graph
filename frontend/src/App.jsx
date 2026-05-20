@@ -115,6 +115,14 @@ function readImageAttachment(file) {
   });
 }
 
+function summarizeExecutionFailures(failures) {
+  const firstFailure = failures.find(Boolean);
+  const action = firstFailure?.action || firstFailure?.instruction?.action || 'unknown';
+  const reason = firstFailure?.error || '未知错误';
+  const suffix = failures.length > 1 ? ` 等 ${failures.length} 条指令` : '';
+  return `${action}${suffix}：${reason}`;
+}
+
 const PreviewModal = ({ data, board, onClose }) => {
   const [svgUrl, setSvgUrl] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
@@ -488,9 +496,11 @@ export default function App() {
       const data = await response.json();
 
       const instructions = data.instructions || [];
+      let executionResult = null;
       if (instructions.length > 0) {
-        engineRef.current.execute(data.instructions);
+        executionResult = engineRef.current.execute(data.instructions);
       }
+      const executionFailures = executionResult?.failed || [];
 
       let aiText = data.responseText;
       if (!aiText) {
@@ -506,8 +516,13 @@ export default function App() {
           aiText = '抱歉，我暂时无法处理这个请求。';
         }
       }
+      if (executionFailures.length > 0) {
+        aiText = `${aiText} 前端执行失败：${summarizeExecutionFailures(executionFailures)}`;
+      }
       setMessages((prev) => [...prev, { role: 'ai', text: aiText }]);
-      if (data.status === 'clarification') {
+      if (executionFailures.length > 0) {
+        setStatus(instructions.length > executionFailures.length ? '未完全执行 - 前端执行失败' : '未执行 - 前端执行失败');
+      } else if (data.status === 'clarification') {
         setStatus('需要澄清 - 请补充说明后再发送');
       } else if (data.status === 'error') {
         setStatus('未执行 - 请调整描述');
@@ -528,7 +543,7 @@ export default function App() {
   const canSend = (inputText.trim().length > 0 || attachedImage) && !isSending;
   const sendButtonLabel = isSending ? '等待结果' : '发送';
   const activeGuide = TOOL_GUIDES[activeTool] || '选择一个工具开始操作。';
-  const statusTone = status.includes('错误') || status.includes('未执行')
+  const statusTone = status.includes('错误') || status.includes('未执行') || status.includes('失败')
     ? 'danger'
     : status.includes('需要') || status.includes('取消') || status.includes('过小')
       ? 'warning'

@@ -8,6 +8,9 @@
     <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/jsxgraph/distrib/jsxgraph.css" />
     <!-- JSXGraph JavaScript -->
     <script type="text/javascript" charset="UTF-8" src="https://cdn.jsdelivr.net/npm/jsxgraph/distrib/jsxgraphcore.js"></script>
+    <!-- KaTeX for formula rendering -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
     <style>
         :root {
             --panel-bg: rgba(255, 255, 255, 0.85);
@@ -161,6 +164,10 @@
             color: #666;
         }
 
+        .ready-status-mobile {
+            display: none;
+        }
+
         /* 响应式微调 */
         @media (max-width: 768px) {
             #chat-container {
@@ -175,6 +182,209 @@
                 transform: translateX(-50%);
                 flex-direction: row;
             }
+            .ready-status-desktop {
+                display: none;
+            }
+            .ready-status-mobile {
+                display: inline;
+            }
+        }
+        /* 公式面板 */
+        #formula-panel {
+            display: none;
+            flex: 1;
+            padding: 12px 15px;
+            overflow-y: auto;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        #formula-panel.active {
+            display: flex;
+        }
+
+        #formula-panel::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        #formula-panel::-webkit-scrollbar-thumb {
+            background: rgba(0,0,0,0.12);
+            border-radius: 2px;
+        }
+
+        .formula-category {
+            margin-bottom: 2px;
+        }
+
+        .formula-category-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #999;
+            margin-bottom: 8px;
+            letter-spacing: 0.5px;
+        }
+
+        .formula-cards {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .formula-card {
+            padding: 8px 12px;
+            background: #fafbfc;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        .formula-card:hover {
+            border-color: rgba(24, 144, 255, 0.3);
+            background: rgba(24, 144, 255, 0.04);
+            box-shadow: 0 2px 8px rgba(24, 144, 255, 0.08);
+        }
+
+        .formula-card-info {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-width: 0;
+            flex: 1;
+        }
+
+        .formula-card-name {
+            font-size: 11px;
+            color: #aaa;
+        }
+
+        .formula-card-preview {
+            font-size: 14px;
+            color: #333;
+            overflow: hidden;
+        }
+
+        .formula-card-preview .katex {
+            font-size: 14px;
+        }
+
+        .formula-card-add {
+            flex-shrink: 0;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: rgba(24, 144, 255, 0.1);
+            color: var(--primary-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 500;
+            opacity: 0;
+            transition: all 0.2s;
+        }
+
+        .formula-card:hover .formula-card-add {
+            opacity: 1;
+        }
+
+        /* 公式自定义输入 */
+        #formula-input-area {
+            display: none;
+            padding: 12px 15px;
+            border-top: 1px solid rgba(0,0,0,0.05);
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        #formula-input-area.active {
+            display: flex;
+        }
+
+        #formula-preview-box {
+            min-height: 36px;
+            padding: 8px 12px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ccc;
+            font-size: 14px;
+            transition: color 0.2s;
+        }
+
+        #formula-preview-box .katex {
+            color: #333;
+        }
+
+        #formula-custom-input {
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid rgba(0,0,0,0.1);
+            outline: none;
+            font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        #formula-custom-input:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(24, 144, 255, 0.08);
+        }
+
+        #formula-add-btn {
+            padding: 8px 16px;
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        #formula-add-btn:hover {
+            background: #0070e0;
+            box-shadow: 0 2px 8px rgba(24, 144, 255, 0.3);
+        }
+
+        /* 标签页 */
+        .chat-tabs {
+            display: flex;
+            gap: 0;
+            flex: 1;
+        }
+
+        .chat-tab {
+            padding: 2px 12px;
+            font-size: 13px;
+            font-weight: 500;
+            color: #bbb;
+            background: none;
+            border: none;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.25s;
+            font-family: inherit;
+        }
+
+        .chat-tab:first-child {
+            padding-left: 0;
+        }
+
+        .chat-tab.active {
+            color: #333;
+            border-bottom-color: var(--primary-color);
+        }
+
+        .chat-tab:hover:not(.active) {
+            color: #666;
         }
     </style>
 </head>
@@ -195,22 +405,36 @@
 
     <!-- 状态栏 -->
     <div id="status-bar" class="floating-panel">
-        就绪 - 请在右侧输入绘图需求（右键平移，左键选择）
+        <span class="ready-status-desktop">就绪-请在右侧输入绘图需求</span>
+        <span class="ready-status-mobile">请在下方输入绘图需求</span>
     </div>
 
     <!-- 聊天容器 -->
     <div id="chat-container" class="floating-panel">
         <div id="chat-header">
-            <span>AI 几何助手</span>
+            <div class="chat-tabs">
+                <button class="chat-tab active" id="tab-chat">💬 对话</button>
+                <button class="chat-tab" id="tab-formula">📐 公式</button>
+            </div>
         </div>
         <div id="chat-messages">
             <div class="message ai">
-                你好！我是你的几何助手。你可以告诉我你想画什么，比如：“画一个正方形 ABCD”。
+                你好！我是你的几何助手。你可以告诉我你想画什么，比如："画一个正方形 ABCD"。
             </div>
+        </div>
+        <div id="formula-panel">
+            <!-- formula cards built by JS -->
         </div>
         <div id="chat-input-area">
             <input type="text" id="chat-input" placeholder="描述题目意图..." />
             <button id="send-btn">发送</button>
+        </div>
+        <div id="formula-input-area">
+            <div id="formula-preview-box"><span style="color:#ccc">公式预览</span></div>
+            <div style="display: flex; gap: 8px;">
+                <input type="text" id="formula-custom-input" placeholder="输入 LaTeX 公式，如 E=mc^2" style="flex:1" />
+                <button id="formula-add-btn">添加</button>
+            </div>
         </div>
     </div>
 
@@ -465,7 +689,17 @@
 
         // --- AI 聊天与 DSL 模拟接口 ---
 
-        function updateStatus(text) { document.getElementById('status-bar').textContent = text; }
+        const READY_STATUS = '就绪-请在右侧输入绘图需求';
+        const MOBILE_READY_STATUS = '请在下方输入绘图需求';
+
+        function updateStatus(text) {
+            const statusBar = document.getElementById('status-bar');
+            if (text === READY_STATUS) {
+                statusBar.innerHTML = `<span class="ready-status-desktop">${READY_STATUS}</span><span class="ready-status-mobile">${MOBILE_READY_STATUS}</span>`;
+                return;
+            }
+            statusBar.textContent = text;
+        }
 
         document.getElementById('send-btn').onclick = function() {
             const input = document.getElementById('chat-input');
@@ -563,7 +797,7 @@
                 }
 
                 appendMessage('ai', responseText);
-                updateStatus('就绪');
+                updateStatus('就绪-请在右侧输入绘图需求');
             }, 1000);
         }
 
@@ -575,6 +809,187 @@
             container.appendChild(div);
             container.scrollTop = container.scrollHeight;
         }
+
+        // --- 公式面板逻辑 ---
+
+        const formulaData = [
+            {
+                category: '📐 面积',
+                formulas: [
+                    { name: '三角形面积', latex: 'S = \\frac{1}{2}ah' },
+                    { name: '矩形面积', latex: 'S = ab' },
+                    { name: '圆的面积', latex: 'S = \\pi r^2' },
+                    { name: '梯形面积', latex: 'S = \\frac{1}{2}(a+b)h' },
+                    { name: '平行四边形', latex: 'S = ah' },
+                ]
+            },
+            {
+                category: '📏 周长',
+                formulas: [
+                    { name: '圆的周长', latex: 'C = 2\\pi r' },
+                    { name: '矩形周长', latex: 'C = 2(a+b)' },
+                ]
+            },
+            {
+                category: '📊 定理',
+                formulas: [
+                    { name: '勾股定理', latex: 'a^2 + b^2 = c^2' },
+                    { name: '余弦定理', latex: 'c^2 = a^2 + b^2 - 2ab\\cos C' },
+                    { name: '正弦定理', latex: '\\frac{a}{\\sin A} = \\frac{b}{\\sin B} = \\frac{c}{\\sin C}' },
+                    { name: '三角形内角和', latex: '\\alpha + \\beta + \\gamma = 180^{\\circ}' },
+                ]
+            },
+            {
+                category: '📏 其他',
+                formulas: [
+                    { name: '弧长公式', latex: 'l = r\\theta' },
+                    { name: '扇形面积', latex: 'S = \\frac{1}{2}r^2\\theta' },
+                    { name: '两点距离', latex: 'd = \\sqrt{(x_2-x_1)^2+(y_2-y_1)^2}' },
+                ]
+            }
+        ];
+
+        let formulaCount = 0;
+        let formulaPanelActive = false;
+
+        function renderKatex(latex) {
+            try {
+                if (typeof katex !== 'undefined') {
+                    return katex.renderToString(latex, { throwOnError: false, displayMode: false });
+                }
+            } catch(e) {}
+            return latex;
+        }
+
+        function buildFormulaPanel() {
+            const panel = document.getElementById('formula-panel');
+            formulaData.forEach(function(cat) {
+                const section = document.createElement('div');
+                section.className = 'formula-category';
+
+                const title = document.createElement('div');
+                title.className = 'formula-category-title';
+                title.textContent = cat.category;
+                section.appendChild(title);
+
+                const cards = document.createElement('div');
+                cards.className = 'formula-cards';
+
+                cat.formulas.forEach(function(f) {
+                    const card = document.createElement('div');
+                    card.className = 'formula-card';
+                    card.innerHTML =
+                        '<div class="formula-card-info">' +
+                            '<div class="formula-card-name">' + f.name + '</div>' +
+                            '<div class="formula-card-preview">' + renderKatex(f.latex) + '</div>' +
+                        '</div>' +
+                        '<div class="formula-card-add">+</div>';
+                    card.addEventListener('click', function() { placeFormulaOnBoard(f.latex, f.name); });
+                    cards.appendChild(card);
+                });
+
+                section.appendChild(cards);
+                panel.appendChild(section);
+            });
+        }
+
+        function placeFormulaOnBoard(latex, name) {
+            formulaCount++;
+            var x = -8 + ((formulaCount - 1) % 3) * 5;
+            var y = 8 - Math.floor((formulaCount - 1) / 3) * 2.5;
+
+            try {
+                var formulaText = board.create('text', [x, y, '$' + latex + '$'], {
+                    fontSize: 18,
+                    useKatex: true,
+                    fixed: false,
+                    anchorX: 'left',
+                    anchorY: 'middle',
+                    highlight: true,
+                    strokeColor: '#333'
+                });
+                registry.register('formula_' + formulaCount, formulaText);
+                appendMessage('ai', '已将公式「' + (name || latex) + '」添加到画板，可拖动调整位置。');
+            } catch(e) {
+                console.error('添加公式失败:', e);
+                var fallback = board.create('text', [x, y, latex], {
+                    fontSize: 16,
+                    fixed: false,
+                    anchorX: 'left'
+                });
+                registry.register('formula_' + formulaCount, fallback);
+                appendMessage('ai', '已将公式添加到画板（纯文本模式）。');
+            }
+
+            toggleFormulaPanel(false);
+        }
+
+        function toggleFormulaPanel(show) {
+            formulaPanelActive = (show !== undefined) ? show : !formulaPanelActive;
+
+            var chatMessages = document.getElementById('chat-messages');
+            var chatInputArea = document.getElementById('chat-input-area');
+            var formulaPanel = document.getElementById('formula-panel');
+            var formulaInputArea = document.getElementById('formula-input-area');
+            var tabChat = document.getElementById('tab-chat');
+            var tabFormula = document.getElementById('tab-formula');
+
+            if (formulaPanelActive) {
+                chatMessages.style.display = 'none';
+                chatInputArea.style.display = 'none';
+                formulaPanel.classList.add('active');
+                formulaInputArea.classList.add('active');
+                tabChat.classList.remove('active');
+                tabFormula.classList.add('active');
+            } else {
+                chatMessages.style.display = '';
+                chatInputArea.style.display = '';
+                formulaPanel.classList.remove('active');
+                formulaInputArea.classList.remove('active');
+                tabChat.classList.add('active');
+                tabFormula.classList.remove('active');
+            }
+        }
+
+        // Custom formula input - live preview
+        document.getElementById('formula-custom-input').addEventListener('input', function() {
+            var preview = document.getElementById('formula-preview-box');
+            if (this.value.trim()) {
+                preview.innerHTML = renderKatex(this.value);
+            } else {
+                preview.innerHTML = '<span style="color:#ccc">公式预览</span>';
+            }
+        });
+
+        // Enter key to add custom formula
+        document.getElementById('formula-custom-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                var latex = this.value.trim();
+                if (latex) {
+                    placeFormulaOnBoard(latex, '自定义公式');
+                    this.value = '';
+                    document.getElementById('formula-preview-box').innerHTML = '<span style="color:#ccc">公式预览</span>';
+                }
+            }
+        });
+
+        // Add button for custom formula
+        document.getElementById('formula-add-btn').addEventListener('click', function() {
+            var input = document.getElementById('formula-custom-input');
+            var latex = input.value.trim();
+            if (latex) {
+                placeFormulaOnBoard(latex, '自定义公式');
+                input.value = '';
+                document.getElementById('formula-preview-box').innerHTML = '<span style="color:#ccc">公式预览</span>';
+            }
+        });
+
+        // Tab switching
+        document.getElementById('tab-chat').addEventListener('click', function() { toggleFormulaPanel(false); });
+        document.getElementById('tab-formula').addEventListener('click', function() { toggleFormulaPanel(true); });
+
+        // Initialize formula panel on load
+        buildFormulaPanel();
 
         window.onresize = function() { board.resizeContainer(window.innerWidth, window.innerHeight); };
     </script>

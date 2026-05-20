@@ -163,6 +163,97 @@ function createPoint(label, x = 0, y = 0) {
   };
 }
 
+async function loadDrawingEngine() {
+  const createElement = () => ({
+    style: {},
+    getContext: () => ({}),
+    getElementsByTagName: () => []
+  });
+  globalThis.window = globalThis.window || {};
+  globalThis.document = globalThis.document || {
+    body: { style: {} },
+    createElement,
+    createElementNS: createElement
+  };
+  globalThis.document.body = globalThis.document.body || { style: {} };
+  globalThis.document.createElement = globalThis.document.createElement || createElement;
+  globalThis.document.createElementNS = globalThis.document.createElementNS || createElement;
+
+  return import('../src/lib/DrawingEngine.js');
+}
+
+function createDrawingEngineHarness(options = {}) {
+  const shapes = new Map(options.shapes || []);
+  const registry = {
+    setSnapshotFactory() {},
+    setRestoreHandler() {},
+    beginUndoBatch() {},
+    endUndoBatch() {},
+    get(id) {
+      return shapes.get(id);
+    },
+    register(id, obj) {
+      shapes.set(id, obj);
+      obj.registryId = id;
+    },
+    removeById(_board, id) {
+      if (!shapes.has(id)) {
+        return null;
+      }
+      shapes.delete(id);
+      return id;
+    },
+    exists(id) {
+      return shapes.has(id);
+    },
+    idForObject(obj) {
+      for (const [id, value] of shapes.entries()) {
+        if (value === obj) return id;
+      }
+      return null;
+    },
+    entries() {
+      return Array.from(shapes.entries());
+    }
+  };
+  const board = {
+    created: [],
+    defaultAxes: {
+      x: { setAttribute(attrs) { this.attrs = attrs; } },
+      y: { setAttribute(attrs) { this.attrs = attrs; } }
+    },
+    suspendUpdate() {},
+    unsuspendUpdate() {},
+    update() {},
+    create(type, args, attrs = {}) {
+      if (options.failCreateType === type) {
+        return null;
+      }
+      const obj = {
+        elType: type,
+        args,
+        attrs,
+        meta: {},
+        on() {},
+        setAttribute(nextAttrs) {
+          this.attrs = { ...this.attrs, ...nextAttrs };
+        },
+        X: () => Array.isArray(args) && typeof args[0] === 'number' ? args[0] : 0,
+        Y: () => Array.isArray(args) && typeof args[1] === 'number' ? args[1] : 0,
+        getName: () => attrs.name || ''
+      };
+      if (type === 'circle') {
+        obj.center = args[0];
+        obj.radiuspoint = args[1];
+        obj.Radius = () => 1;
+      }
+      this.created.push(obj);
+      return obj;
+    }
+  };
+  return { board, registry };
+}
+
 test('ShapeRegistry keeps batched registrations in one undo step', () => {
   const registry = new ShapeRegistry();
   const removed = [];
@@ -184,6 +275,75 @@ test('ShapeRegistry keeps batched registrations in one undo step', () => {
 
   assert.equal(registry.redo(board), 'A');
   assert.deepEqual(registry.history, ['A', 'B']);
+});
+
+test('DrawingEngine execute reports unsupported actions without throwing', async () => {
+  const { DrawingEngine } = await loadDrawingEngine();
+  const { board, registry } = createDrawingEngineHarness();
+  const engine = new DrawingEngine(board, registry);
+
+  const result = engine.execute([{ action: 'unsupported_action', params: {}, result_id: 'bad' }]);
+
+  assert.equal(result.success, false);
+  assert.equal(result.failed.length, 1);
+  assert.match(result.failed[0].error, /unsupported action/);
+  assert.deepEqual(result.created, []);
+});
+
+test('DrawingEngine execute reports missing references', async () => {
+  const { DrawingEngine } = await loadDrawingEngine();
+  const { board, registry } = createDrawingEngineHarness();
+  const engine = new DrawingEngine(board, registry);
+
+  const result = engine.execute([{
+    action: 'segment',
+    params: { p1: 'A', p2: 'B' },
+    result_id: 'segment_AB'
+  }]);
+
+  assert.equal(result.success, false);
+  assert.equal(result.failed.length, 1);
+  assert.match(result.failed[0].error, /missing reference: p1/);
+});
+
+test('DrawingEngine execute reports JSXGraph creation failures', async () => {
+  const { DrawingEngine } = await loadDrawingEngine();
+  const pointA = createPoint('A');
+  const pointB = createPoint('B', 1, 0);
+  const { board, registry } = createDrawingEngineHarness({
+    failCreateType: 'line',
+    shapes: [['A', pointA], ['B', pointB]]
+  });
+  const engine = new DrawingEngine(board, registry);
+
+  const result = engine.execute([{
+    action: 'line',
+    params: { p1: 'A', p2: 'B' },
+    result_id: 'line_AB'
+  }]);
+
+  assert.equal(result.success, false);
+  assert.equal(result.failed.length, 1);
+  assert.match(result.failed[0].error, /JSXGraph did not create object/);
+});
+
+test('DrawingEngine execute allows objectless axis and delete actions', async () => {
+  const { DrawingEngine } = await loadDrawingEngine();
+  const object = createPoint('A');
+  const { board, registry } = createDrawingEngineHarness({
+    shapes: [['A', object]]
+  });
+  const engine = new DrawingEngine(board, registry);
+
+  const result = engine.execute([
+    { action: 'show_axis', params: { visible: true } },
+    { action: 'delete_object', params: { target: 'A' } }
+  ]);
+
+  assert.equal(result.success, true);
+  assert.equal(result.failed.length, 0);
+  assert.equal(registry.exists('A'), false);
+  assert.deepEqual(result.created, []);
 });
 
 test('ShapeRegistry can merge provisional steps into one undo step', () => {

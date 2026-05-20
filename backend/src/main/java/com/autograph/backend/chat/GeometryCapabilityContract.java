@@ -97,6 +97,9 @@ final class GeometryCapabilityContract {
         if ("delete_object".equals(instruction.action())) {
             return validateDeleteObject(params, known);
         }
+        if ("show_axis".equals(instruction.action())) {
+            return validateShowAxis(params);
+        }
         var resultId = instruction.resultId();
         if (resultId == null || resultId.isBlank()) {
             return ValidationResult.invalid("missing_required_param");

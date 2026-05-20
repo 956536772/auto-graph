@@ -10,6 +10,8 @@ import java.util.regex.Pattern;
 
 final class GeometryInstructionNormalizer {
     private static final Pattern ANGLE_BISECTOR_SEGMENT_LABEL = Pattern.compile("角平分线\\s*([A-Za-z])\\s*([A-Za-z])");
+    private static final Pattern LINE_BY_TWO_POINTS = Pattern.compile("直线\\s*([A-Za-z])\\s*([A-Za-z])");
+    private static final Pattern TANGENT_FROM_POINT_TO_CIRCLE = Pattern.compile("过点?\\s*([A-Za-z]).*圆\\s*([A-Za-z]).*切线");
 
     private GeometryInstructionNormalizer() {
     }
@@ -26,7 +28,67 @@ final class GeometryInstructionNormalizer {
         if (requestsAngleBisectorSegment(rawText)) {
             normalized = normalizeAngleBisectorSegment(normalized, rawText);
         }
+        if (requestsLineByTwoPoints(rawText)) {
+            normalized = normalizeLineByTwoPoints(normalized, rawText);
+        }
+        if (requestsTangentsFromPointToCircle(rawText)) {
+            normalized = normalizeTangentsFromPointToCircle(normalized, rawText);
+        }
         return normalized;
+    }
+
+    private static List<DrawingInstruction> normalizeTangentsFromPointToCircle(List<DrawingInstruction> instructions, String rawText) {
+        var request = tangentFromPointToCircle(rawText);
+        if (request == null) {
+            return instructions;
+        }
+
+        var normalized = new ArrayList<DrawingInstruction>();
+        var changed = false;
+        for (var instruction : instructions) {
+            if (!"tangent".equals(instruction.action())) {
+                normalized.add(instruction);
+                continue;
+            }
+            var point = stringParam(instruction.params(), "point");
+            if (point == null) {
+                normalized.add(instruction);
+                continue;
+            }
+            var params = new HashMap<>(instruction.params());
+            params.put("point", point);
+            var circle = stringParam(instruction.params(), "circle");
+            params.put("circle", circle == null ? request.circleLabel() : circle);
+            normalized.add(new DrawingInstruction("tangents_from_point_to_circle", params, instruction.resultId(), instruction.label()));
+            changed = true;
+        }
+        return changed ? normalized : instructions;
+    }
+
+    private static List<DrawingInstruction> normalizeLineByTwoPoints(List<DrawingInstruction> instructions, String rawText) {
+        var lineLabel = lineByTwoPointsLabel(rawText);
+        if (lineLabel == null) {
+            return instructions;
+        }
+
+        var segmentCount = instructions.stream().filter(instruction -> "segment".equals(instruction.action())).count();
+        var normalized = new ArrayList<DrawingInstruction>();
+        var changed = false;
+        for (var instruction : instructions) {
+            if (!"segment".equals(instruction.action())) {
+                normalized.add(instruction);
+                continue;
+            }
+            var p1 = stringParam(instruction.params(), "p1");
+            var p2 = stringParam(instruction.params(), "p2");
+            if (segmentCount != 1 && !lineLabel.matches(p1, p2)) {
+                normalized.add(instruction);
+                continue;
+            }
+            normalized.add(new DrawingInstruction("line", instruction.params(), instruction.resultId(), instruction.label()));
+            changed = true;
+        }
+        return changed ? normalized : instructions;
     }
 
     private static List<DrawingInstruction> normalizePerpendicularSegment(List<DrawingInstruction> instructions) {
@@ -267,6 +329,36 @@ final class GeometryInstructionNormalizer {
         return angleBisectorSegmentLabel(text) != null;
     }
 
+    private static boolean requestsLineByTwoPoints(String text) {
+        return lineByTwoPointsLabel(text) != null;
+    }
+
+    private static boolean requestsTangentsFromPointToCircle(String text) {
+        return tangentFromPointToCircle(text) != null;
+    }
+
+    private static TangentFromPointToCircle tangentFromPointToCircle(String text) {
+        if (text == null) {
+            return null;
+        }
+        var matcher = TANGENT_FROM_POINT_TO_CIRCLE.matcher(text);
+        if (!matcher.find()) {
+            return null;
+        }
+        return new TangentFromPointToCircle(matcher.group(1).toUpperCase(), matcher.group(2).toUpperCase());
+    }
+
+    private static LineLabel lineByTwoPointsLabel(String text) {
+        if (text == null) {
+            return null;
+        }
+        var matcher = LINE_BY_TWO_POINTS.matcher(text);
+        if (!matcher.find()) {
+            return null;
+        }
+        return new LineLabel(matcher.group(1).toUpperCase(), matcher.group(2).toUpperCase());
+    }
+
     private static BisectorSegmentLabel angleBisectorSegmentLabel(String text) {
         if (text == null) {
             return null;
@@ -333,5 +425,18 @@ final class GeometryInstructionNormalizer {
             var normalized = resultId.replace("_", "").replace("-", "").toUpperCase();
             return normalized.equals(start + end) || normalized.endsWith(start + end);
         }
+    }
+
+    private record LineLabel(String first, String second) {
+        boolean matches(String p1, String p2) {
+            if (p1 == null || p2 == null) {
+                return false;
+            }
+            return (first.equalsIgnoreCase(p1) && second.equalsIgnoreCase(p2)) ||
+                (first.equalsIgnoreCase(p2) && second.equalsIgnoreCase(p1));
+        }
+    }
+
+    private record TangentFromPointToCircle(String pointLabel, String circleLabel) {
     }
 }
